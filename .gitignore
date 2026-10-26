@@ -19,3 +19,13 @@ samples/*
 .venv
 .perf
 omega-learning-tasks/data
+
+# Personal/local Claude Code instructions for analysis, not shared with the team
+CLAUDE.local.md
+
+# Reference papers used locally, not shared with the team
+Proposal*.pdf
+/\[KS15\]*.pdf
+/\[KM19\]*.pdf
+/\[AK22\]*.pdf
+/\[Ku22\]*.pdf
