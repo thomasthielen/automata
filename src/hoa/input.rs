@@ -1,14 +1,17 @@
 use std::{io::BufRead, ops::Deref};
 
 use crate::automaton::{
-    AcceptanceMask, DeterministicOmegaAutomaton, OmegaAcceptanceCondition, OmegaAutomaton,
+    AcceptanceMask, DCW, DeterministicOmegaAutomaton, NCW, OmegaAcceptanceCondition, OmegaAutomaton,
 };
 use crate::ts::{ForAlphabet, Sproutable, TransitionSystem};
 use crate::{
-    Int,
-    alphabet::{PropAlphabet, PropExpression},
+    Int, NTS, Void,
+    alphabet::{CharAlphabet, PropAlphabet, PropExpression},
 };
-use hoars::HoaRepresentation;
+use biodivine_lib_bdd::BddValuation;
+use hoars::{
+    AbstractLabelExpression, AcceptanceName, HeaderItem, HoaRepresentation, LabelExpression,
+};
 use tracing::{trace, warn};
 
 use super::{HoaError, HoaString};
@@ -225,9 +228,14 @@ impl TryFrom<&hoars::Header> for OmegaAcceptanceCondition {
             hoars::HeaderItem::Acceptance(acceptance, _cond) => Some(*acceptance),
             _ => None,
         });
+        let name = value
+            .iter()
+            .find_map(|it| it.try_acceptance_name())
+            .ok_or_else(|| HoaError::UnsupportedAcceptance("missing acc-name".to_string()))?;
 
-        match value.acceptance_name() {
+        match name.0 {
             hoars::AcceptanceName::Buchi => Ok(OmegaAcceptanceCondition::Buchi),
+            hoars::AcceptanceName::CoBuchi => Ok(OmegaAcceptanceCondition::CoBuchi),
             hoars::AcceptanceName::Parity => {
                 let sets = acceptance_sets.ok_or(HoaError::MissingAcceptanceSets)?;
                 Ok(OmegaAcceptanceCondition::Parity(0, sets as Int))
@@ -302,10 +310,146 @@ pub fn hoa_automaton_to_ts<const DET: bool>(
     ))
 }
 
+/// Reads a tNCW from `hoa`, with the letters encoded *one-hot* as [`super::WriteHoa`] writes
+/// them for a [`CharAlphabet`]: every atomic proposition names a letter, and a letter is
+/// read on an edge if the label holds when exactly the proposition of this letter holds.
+/// All other valuations are ignored, so the labels may be arbitrary boolean expressions,
+/// such as the merged labels that [Spot](https://spot.lre.epita.fr/) writes. The state ids
+/// of `hoa` become the state indices.
+///
+/// # Errors
+/// Returns a [`HoaError`] if `hoa` is not a valid HOA automaton, if its acceptance
+/// condition is not `co-Buchi` (as `acc-name`), if an atomic proposition does not name a
+/// single letter, or if it uses alternation or does not have exactly one initial state.
+///
+/// # Example
+/// ```
+/// use automata::automaton::NCW;
+/// use automata::hoa::{WriteHoa, ncw_from_hoa};
+/// use automata::{Pointed, TransitionSystem};
+///
+/// let ncw = NCW::builder()
+///     .with_edges([(0, 'a', false, 0), (0, 'a', true, 1), (1, 'b', false, 1)])
+///     .into_ncw(0);
+/// let read = ncw_from_hoa(&ncw.to_hoa()).unwrap();
+/// assert_eq!(read.size(), 2);
+/// assert_eq!(read.initial(), 0);
+/// // the nondeterministic choice on `a` in state 0 is kept
+/// assert!(read.try_into_dcw().is_err());
+/// ```
+pub fn ncw_from_hoa(hoa: &str) -> Result<NCW, HoaError> {
+    let aut = HoaRepresentation::try_from(hoa)?;
+    let header = aut.header();
+
+    match header.iter().find_map(|it| it.try_acceptance_name()) {
+        Some((AcceptanceName::CoBuchi, _)) => {}
+        other => {
+            return Err(HoaError::UnsupportedAcceptance(format!(
+                "{:?}, expected co-Buchi",
+                other.map(|(name, _)| name)
+            )));
+        }
+    }
+
+    let aps = header
+        .iter()
+        .find_map(|it| match it {
+            HeaderItem::AP(aps) => Some(aps.as_slice()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let mut letters = Vec::with_capacity(aps.len());
+    for ap in aps {
+        let mut chars = ap.chars();
+        match (chars.next(), chars.next()) {
+            (Some(letter), None) if !letters.contains(&letter) => letters.push(letter),
+            _ => return Err(HoaError::InvalidApName(ap.clone())),
+        }
+    }
+
+    let states = header
+        .count_states()
+        .or_else(|| aut.body().iter().map(|q| q.id() as usize + 1).max())
+        .unwrap_or(0);
+    let mut ts = NTS::for_alphabet(CharAlphabet::new(letters.clone()));
+    let ids: Vec<_> = (0..states).map(|_| ts.add_state(Void)).collect();
+    let state = |id: hoars::Id| {
+        ids.get(id as usize)
+            .copied()
+            .ok_or(HoaError::Unsupported("reference to an undeclared state"))
+    };
+
+    for q in aut.body() {
+        let source = state(q.id())?;
+        for edge in q.edges() {
+            let target = edge
+                .state_conjunction()
+                .get_singleton()
+                .ok_or(HoaError::Unsupported("alternation"))?;
+            let target = state(target)?;
+            let color = match edge.acceptance_signature()[..] {
+                [] => false,
+                [0] => true,
+                ref other => {
+                    return Err(HoaError::UnsupportedAcceptance(format!(
+                        "acceptance signature {other:?} in a co-Büchi automaton"
+                    )));
+                }
+            };
+            for (position, &letter) in letters.iter().enumerate() {
+                if one_hot_satisfies(edge.label(), position, letters.len()) {
+                    ts.add_edge((source, letter, color, target));
+                }
+            }
+        }
+    }
+
+    let initial = match aut.start()[..] {
+        [initial] => initial
+            .get_singleton()
+            .ok_or(HoaError::Unsupported("alternation"))?,
+        _ => return Err(HoaError::Unsupported("not exactly one initial state")),
+    };
+    Ok(NCW::from_parts(ts, state(initial)?))
+}
+
+/// Reads a tDCW from `hoa`, see [`ncw_from_hoa`].
+///
+/// # Errors
+/// Returns [`HoaError::NotDeterministic`] if the automaton is not deterministic, and otherwise
+/// the errors of [`ncw_from_hoa`].
+pub fn dcw_from_hoa(hoa: &str) -> Result<DCW, HoaError> {
+    ncw_from_hoa(hoa)?
+        .try_into_dcw()
+        .map_err(|_| HoaError::NotDeterministic)
+}
+
+/// Evaluates `label` under the valuation of `aps` atomic propositions in which exactly the
+/// proposition `position` holds.
+fn one_hot_satisfies(label: &LabelExpression, position: usize, aps: usize) -> bool {
+    fn eval(expr: &AbstractLabelExpression, position: usize) -> bool {
+        match expr {
+            AbstractLabelExpression::Boolean(b) => *b,
+            AbstractLabelExpression::Integer(ap) => *ap as usize == position,
+            AbstractLabelExpression::Negated(expr) => !eval(expr, position),
+            AbstractLabelExpression::Conjunction(exprs) => exprs.iter().all(|e| eval(e, position)),
+            AbstractLabelExpression::Disjunction(exprs) => exprs.iter().any(|e| eval(e, position)),
+        }
+    }
+
+    match label {
+        LabelExpression::Abstract(expr) => eval(expr, position),
+        LabelExpression::Expression(bdd) => bdd.eval_in(&BddValuation::new(
+            (0..aps).map(|i| i == position).collect(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tracing::debug;
 
+    use super::HoaError;
     use crate::{TransitionSystem, hoa::HoaString};
 
     #[test]
@@ -425,5 +569,121 @@ State: 1
             }
             other => panic!("unexpected result: {:?}", other.map(|_| ())),
         }
+    }
+
+    /// The edges of `aut` as `(source, letter, color, target)`, sorted.
+    fn edges<D>(aut: &D) -> Vec<(u32, char, bool, u32)>
+    where
+        D: TransitionSystem<StateIndex = u32, EdgeColor = bool>,
+        D::Alphabet: crate::alphabet::Alphabet<Expression = char>,
+    {
+        use crate::ts::IsEdge;
+        use itertools::Itertools;
+        aut.state_indices()
+            .flat_map(|q| {
+                aut.edges_from(q)
+                    .into_iter()
+                    .flatten()
+                    .map(|e| (e.source(), *e.expression(), e.color(), e.target()))
+                    .collect_vec()
+            })
+            .sorted()
+            .collect()
+    }
+
+    #[test]
+    fn ncw_round_trip() {
+        use crate::Pointed;
+        use crate::automaton::NCW;
+        use crate::hoa::WriteHoa;
+
+        let ncw: NCW = NCW::builder()
+            .with_edges([
+                (0, 'a', false, 0),
+                (0, 'a', true, 1),
+                (0, 'c', true, 2),
+                (1, 'b', false, 1),
+                (1, 'c', true, 0),
+                (2, 'a', false, 2),
+            ])
+            .into_ncw(1);
+        let read = super::ncw_from_hoa(&ncw.to_hoa()).unwrap();
+        assert_eq!(read.alphabet(), ncw.alphabet());
+        assert_eq!(read.initial(), 1);
+        assert_eq!(edges(&read), edges(&ncw));
+    }
+
+    /// Output of `autfilt -D --sat-minimize='acc="Fin(0)"'` (Spot 2.16.1) for "finitely many
+    /// `c`s" over `{a, b, c}`: Spot merges the edges for `a` and `b` into one label.
+    const SPOT_DCW: &str = r#"HOA: v1
+States: 1
+Start: 0
+AP: 3 "a" "b" "c"
+acc-name: co-Buchi
+Acceptance: 1 Fin(0)
+properties: trans-labels explicit-labels trans-acc deterministic
+--BODY--
+State: 0
+[!0&1&!2 | 0&!1&!2] 0
+[!0&!1&2] 0 {0}
+--END--
+"#;
+
+    #[test]
+    fn dcw_from_spot_output() {
+        let dcw = super::dcw_from_hoa(SPOT_DCW).unwrap();
+        assert_eq!(dcw.size(), 1);
+        assert_eq!(
+            edges(&dcw),
+            vec![(0, 'a', false, 0), (0, 'b', false, 0), (0, 'c', true, 0)]
+        );
+    }
+
+    /// Labels that only hold for valuations in which not exactly one proposition holds read no
+    /// letter, as Spot may produce them when it completes an automaton.
+    #[test]
+    fn invalid_valuations_are_ignored() {
+        let hoa = SPOT_DCW.replace(
+            "[!0&!1&2] 0 {0}",
+            "[!0&!1&2] 0 {0}\n[!0&!1&!2 | 0&1 | 0&2 | 1&2] 0 {0}",
+        );
+        let ncw = super::ncw_from_hoa(&hoa).unwrap();
+        assert_eq!(
+            edges(&ncw),
+            vec![(0, 'a', false, 0), (0, 'b', false, 0), (0, 'c', true, 0)]
+        );
+    }
+
+    #[test]
+    fn co_buchi_import_errors() {
+        let buchi = SPOT_DCW
+            .replace("acc-name: co-Buchi", "acc-name: Buchi")
+            .replace("Fin(0)", "Inf(0)");
+        assert!(matches!(
+            super::ncw_from_hoa(&buchi),
+            Err(HoaError::UnsupportedAcceptance(_))
+        ));
+
+        let long_name = SPOT_DCW.replace("\"c\"", "\"cc\"");
+        assert_eq!(
+            super::ncw_from_hoa(&long_name).map(|_| ()),
+            Err(HoaError::InvalidApName("cc".to_string()))
+        );
+
+        let nondeterministic = SPOT_DCW.replace("[!0&!1&2] 0 {0}", "[!0&!1&2] 0 {0}\n[2] 0");
+        assert!(super::ncw_from_hoa(&nondeterministic).is_ok());
+        assert_eq!(
+            super::dcw_from_hoa(&nondeterministic).map(|_| ()),
+            Err(HoaError::NotDeterministic)
+        );
+    }
+
+    #[test]
+    fn co_buchi_header_is_recognized() {
+        let parsed = hoars::HoaRepresentation::try_from(SPOT_DCW).expect("valid HOA syntax");
+        assert_eq!(
+            super::OmegaAcceptanceCondition::try_from(parsed.header()),
+            Ok(super::OmegaAcceptanceCondition::CoBuchi)
+        );
     }
 }

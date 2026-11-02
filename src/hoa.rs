@@ -8,6 +8,7 @@ pub use error::HoaError;
 pub mod input;
 pub use input::{
     HoaAutomatonStream, IntoDeterministicHoaAutomatonStream, NoneterministicHoaAutomatonStream,
+    dcw_from_hoa, ncw_from_hoa,
 };
 
 pub mod output;
