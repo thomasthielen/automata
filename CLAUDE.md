@@ -16,6 +16,7 @@ cargo test                         # 68 unit tests, 45 doctests (some ignored)
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo test --features spot spot:: -- --ignored   # Spot tests, need autfilt (via WSL on Windows)
 ./scripts/check                    # same as CI: fmt, clippy, doc, per-feature check (needs cargo-hack), tests in three feature configurations
 ```
 
@@ -32,11 +33,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
   - `connected_components/`: Tarjan SCCs, `SccDecomposition`. `reachable.rs`: reachability, minimal representatives. `builder.rs`: `TSBuilder`.
   - Capability traits: `Deterministic`, `Pointed`, `Sproutable`, `Shrinkable`, `PredecessorIterable`; conversions in `representation.rs` (`CollectTs`, `IntoTs`).
 - `src/automaton.rs` and `src/automaton/`: `Automaton<A, Z, Q, C, D, const OMEGA, const DET>` pairs a TS with an initial state and acceptance condition `Z`. Aliases `DFA`, `DBA`, `DPA`, Moore/Mealy. `omega/` has `buchi`, `parity` (four min/max even/odd variants), `rabin`, `muller`; the `Semantics` trait defines acceptance.
-- `src/congruence/` (right congruences, Cayley graphs, transition profiles), `src/minimization/partition_refinement.rs`, `src/families/` (FDFA, FWPM), `src/hoa/` (feature `hoa`), `src/dot.rs` (Graphviz/dot output and rendering), `src/random/` (feature `random`).
+- `src/congruence/` (right congruences, Cayley graphs, transition profiles), `src/minimization/partition_refinement.rs`, `src/families/` (FDFA, FWPM), `src/hoa/` (feature `hoa`), `src/dot.rs` (Graphviz/dot output and rendering), `src/random/` (feature `random`), `src/spot.rs` (feature `spot`: runs Spot's `autfilt` through a launcher, `wsl -e` by default on Windows, overridable via `AUTOMATA_SPOT`; HOA over stdin/stdout, helper `sh` scripts for multi-automaton calls).
 
 Edges are labeled with alphabet *expressions*; a *transition* is the concrete (state, symbol) step. Capabilities are layered via extra traits rather than one large trait; add a trait or blanket impl rather than extending `TransitionSystem`.
 
-Features: `default = ["hoa"]`; opt-in: `random`, `render` (SVG/PNG via `resvg`/`layout-rs`, experimental), `graphviz` (calls the `dot` executable, implies `render`). Text `dot` output is always available.
+Features: `default = ["hoa"]`; opt-in: `random`, `spot` (implies `hoa`, no extra dependencies), `render` (SVG/PNG via `resvg`/`layout-rs`, experimental), `graphviz` (calls the `dot` executable, implies `render`). Text `dot` output is always available.
 
 ## Conventions
 

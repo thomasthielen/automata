@@ -80,6 +80,9 @@ pub mod games;
 #[cfg(feature = "random")]
 pub mod random;
 
+#[cfg(feature = "spot")]
+pub mod spot;
+
 /// This module deals with transforming a transition system (or similar) into a representation in the dot (graphviz) format.
 pub mod dot;
 

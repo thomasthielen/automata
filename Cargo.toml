@@ -44,6 +44,7 @@ test-log = { version = "0.2", features = ["trace"] }
 default = ["hoa"]
 random = ["dep:rand_distr"]
 hoa = ["dep:hoars"]
+spot = ["hoa"]
 graphviz = ["dep:tempfile", "dep:open", "render"]
 render = ["dep:layout-rs", "dep:base64", "dep:resvg", "dep:open", "dep:usvg"]
 

@@ -17,6 +17,10 @@ pub enum Error {
     #[cfg(feature = "hoa")]
     #[error(transparent)]
     Hoa(#[from] crate::hoa::HoaError),
+    /// An error occurred when running Spot.
+    #[cfg(feature = "spot")]
+    #[error(transparent)]
+    Spot(#[from] crate::spot::SpotError),
 }
 
 /// Shorthand for results whose error type is [`enum@Error`].
