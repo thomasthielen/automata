@@ -12,6 +12,9 @@ use std::cmp::min;
 use std::collections::BTreeMap;
 use tracing::{debug, info};
 
+mod layered;
+pub use layered::{LayeredNcw, LayeredParameters};
+
 /// Uses sprout-like algorithm to generate a random transition system. `symbols` determines the
 /// number of distinct symbols in the [`CharAlphabet`]. `probability` determines the probability
 /// of a back edge to some state being inserted. The algorithm is as follows:

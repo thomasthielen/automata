@@ -48,5 +48,9 @@ spot = ["hoa"]
 graphviz = ["dep:tempfile", "dep:open", "render"]
 render = ["dep:layout-rs", "dep:base64", "dep:resvg", "dep:open", "dep:usvg"]
 
+[[example]]
+name = "hd_criteria"
+required-features = ["random"]
+
 [package.metadata.docs.rs]
 all-features = true

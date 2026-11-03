@@ -7,6 +7,9 @@ pub enum Error {
     /// The requested operation is not (yet) implemented for the given input.
     #[error("not yet implemented: {0}")]
     NotYetImplemented(&'static str),
+    /// The input does not satisfy a precondition of the operation, which is described.
+    #[error("invalid input: {0}")]
+    InvalidInput(&'static str),
     /// An alphabet could not be converted into a propositional alphabet.
     #[error(transparent)]
     PropAlphabet(#[from] crate::alphabet::PropAlphabetError),

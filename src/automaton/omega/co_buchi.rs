@@ -17,10 +17,12 @@ use std::collections::{BTreeMap, BTreeSet};
 // [AK22]: Bader Abu Radi, Orna Kupferman: Minimization and Canonization of GFG Transition-Based
 //         Automata. Log. Methods Comput. Sci. 18(3) (2022)
 mod centralize;
+mod dbp;
 mod determinize;
 mod minimize;
 mod normalize;
 
+pub use dbp::{Cell, Criterion, HdCharacteristics, Pruning};
 use determinize::LanguageClasses;
 
 #[cfg(test)]
