@@ -11,7 +11,17 @@
 //! seed `seed + i`), `symbols` (2), `layer1` (4; the Layer-1 size of each sample is drawn from
 //! `1..=layer1`), `children` (3), `safe` (0.75), `max_prunings` (3000). The flag `spot` checks
 //! every pruning that shows a criterion to be only sufficient with Spot's `autfilt`.
+//!
+//! The column `cyclic` is the outcome of the cyclic pruning (`verified`, `ambiguous`,
+//! `not_saturated`, `NOT_EQUIVALENT`). A verified cyclic pruning replaces the search, so
+//! `max_prunings` only limits the instances where it fails.
+//!
+//! The last two columns are `minimal_hd_tncw`, the canonical minimal HD-tNCW `C`, and
+//! `minimal_tdcw`, which is filled only if `C` is DBP: a pruning of `C` (same state numbering)
+//! with hd states, so a minimal tDCW and a witness for d = hd. Both are written as `init q`
+//! followed by the transitions `q-σ->p` (safe) and `q-σ=>p` (`α`).
 
+use automata::alphabet::CharAlphabet;
 use automata::automaton::{Criterion, HdCharacteristics, Pruning};
 use automata::random::{LayeredNcw, LayeredParameters};
 use automata::{Pointed, TransitionSystem};
@@ -47,7 +57,7 @@ fn main() -> ExitCode {
     }
 
     println!(
-        "sample,seed,layer1,size,hd,classes,components,cells,max_maxima,{},prunings,d_eq_hd,only_sufficient,spot,minimal",
+        "sample,seed,layer1,size,hd,classes,components,cells,max_maxima,{},cyclic,prunings,d_eq_hd,only_sufficient,spot,minimal_hd_tncw,minimal_tdcw",
         Criterion::ALL.map(|c| c.name()).join(",")
     );
     let mut summary = Summary::default();
@@ -80,7 +90,7 @@ fn main() -> ExitCode {
         };
         summary.add(&hd, &spot_check);
         println!(
-            "{sample},{},{},{},{},{},{},{},{},{},{},{},{},{spot_check},{}",
+            "{sample},{},{},{},{},{},{},{},{},{},{},{},{},{},{spot_check},{},{}",
             seed + sample,
             layered.layer1_size(),
             layered.size(),
@@ -94,6 +104,7 @@ fn main() -> ExitCode {
                 .map(|b| b as u8)
                 .map(|b| b.to_string())
                 .join(","),
+            hd.cyclic.name(),
             hd.prunings,
             match hd.d_equals_hd() {
                 Some(true) => "yes",
@@ -105,17 +116,23 @@ fn main() -> ExitCode {
                 .map(|c| c.name())
                 .collect::<Vec<_>>()
                 .join(" "),
-            transitions(&hd),
+            transitions(&hd.minimal),
+            match &hd.pruning {
+                Pruning::Found(dcw) => transitions(dcw),
+                _ => String::new(),
+            },
         );
     }
     summary.print(samples);
     ExitCode::SUCCESS
 }
 
-/// The transitions of the minimal automaton as `q-σ->p` (safe) and `q-σ=>p` (`α`), initial
-/// state first.
-fn transitions(hd: &HdCharacteristics) -> String {
-    let c = &hd.minimal;
+/// The transitions of an automaton as `q-σ->p` (safe) and `q-σ=>p` (`α`), initial state first.
+/// Used for the minimal automaton and for the deterministic witness.
+fn transitions<T>(c: &T) -> String
+where
+    T: TransitionSystem<StateIndex = u32, EdgeColor = bool, Alphabet = CharAlphabet> + Pointed,
+{
     let mut edges: Vec<String> = vec![format!("init {}", c.initial())];
     for q in c.state_indices() {
         for (_, sym, alpha, p) in c.transitions_from(q) {
@@ -152,6 +169,8 @@ struct Summary {
     unknown: usize,
     /// per criterion: (holds, fails although d = hd, holds although d > hd)
     criteria: BTreeMap<Criterion, (usize, usize, usize)>,
+    /// outcomes of the cyclic pruning
+    cyclic: BTreeMap<&'static str, usize>,
     spot_confirmed: usize,
     spot_disagrees: usize,
 }
@@ -169,6 +188,7 @@ impl Summary {
             entry.1 += hd.only_sufficient().contains(&c) as usize;
             entry.2 += hd.refuted().contains(&c) as usize;
         }
+        *self.cyclic.entry(hd.cyclic.name()).or_default() += 1;
         self.spot_confirmed += (spot == "equivalent") as usize;
         self.spot_disagrees += (spot == "DIFFERENT" || spot == "error") as usize;
     }
@@ -184,6 +204,12 @@ impl Summary {
                 c.name()
             );
         }
+        let cyclic: Vec<String> = self
+            .cyclic
+            .iter()
+            .map(|(name, count)| format!("{name} {count}"))
+            .collect();
+        eprintln!("  cyclic pruning: {}", cyclic.join(", "));
         if self.spot_confirmed + self.spot_disagrees > 0 {
             eprintln!(
                 "  Spot: {} witnesses equivalent, {} different or failed",

@@ -7,6 +7,11 @@
 //! itself: it is a tDCW with hd states whose equivalence is checked by the search. The converse,
 //! "not DBP ⇒ d > hd", relies on the thesis result that every minimal tDCW, once normalized,
 //! embeds into `C` via the safe isomorphism of \[AK22, Theorem 4.2\].
+//!
+//! Before searching, [`NCW::hd_characteristics`] builds the *cyclic pruning* (see
+//! [`CyclicPruning`]), which needs no search and is equivalent to `C` whenever the cell criterion
+//! holds. It is checked for equivalence like every other pruning, so it is a certificate for
+//! d = hd by itself, also for automata that are too large for the search.
 
 use super::{DCW, NCW};
 use crate::alphabet::CharAlphabet;
@@ -14,7 +19,7 @@ use crate::error::{Error, Result};
 use crate::ts::{ForAlphabet, Sproutable};
 use crate::{DTS, NTS, Pointed, TransitionSystem, Void};
 use std::collections::{BTreeMap, BTreeSet};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// A sufficient criterion for d-size = hd-size, checked on the canonical minimal GFG-tNCW `C`.
 /// Each criterion implies the next one in [`Criterion::ALL`], so [`Criterion::AlphaTargetCell`]
@@ -24,7 +29,8 @@ pub enum Criterion {
     /// hd equals the number of language classes, so `C` is deterministic already.
     Trivial,
     /// Every cell (see [`Cell`]) has exactly one maximum with respect to safe language
-    /// inclusion (Löding). Then the cyclic pruning yields a tDCW with hd states.
+    /// inclusion (Löding). Then the cyclic pruning (see [`CyclicPruning`]) yields a tDCW with
+    /// hd states.
     Cell,
     /// Like [`Criterion::Cell`], but only for cells whose class is the target of some
     /// `α`-transition, as the cyclic pruning never jumps into any other class. Only sketched.
@@ -48,6 +54,10 @@ impl Criterion {
 /// A cell of a nice GFG-tNCW: the states of one language class that lie in one safe component.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
+    /// The index of the class of the cell in [`HdCharacteristics::classes`].
+    pub class: usize,
+    /// The index of the safe component of the cell in [`HdCharacteristics::components`].
+    pub component: usize,
     /// The states of the cell, in increasing order.
     pub states: Vec<u32>,
     /// The states of the cell whose safe language is not strictly contained in the safe language
@@ -69,6 +79,72 @@ pub enum Pruning {
     TooLarge,
 }
 
+/// The cyclic pruning of the canonical minimal GFG-tNCW `C` (Löding's cell criterion).
+///
+/// The safe components of `C` are ordered cyclically as in [`HdCharacteristics::components`].
+/// The pruning keeps every safe transition and the initial state of `C`. Where a state `q` has no
+/// safe `σ`-transition, it keeps only the `α`-transition to the maximum of the cell `(C′, S_j)`,
+/// where `C′` is the class of the `σ`-successors of `q` and `S_j` is the first component after
+/// the one of `q` (cyclically, ending with the one of `q` itself) that contains states of `C′`.
+/// If the cell criterion holds, the pruning is equivalent to `C`: on an accepted word, from some
+/// point on a safe component `S*` contains, at every step, a state of the current class that
+/// reads the rest of the word safely. The cyclic order never skips `S*`, and once the run lands in
+/// `S*` on the maximum of a cell, it reads the rest of the word safely as well.
+///
+/// Only the cells that the pruning jumps into need a unique maximum, and these are cells of
+/// `α`-target classes. So the pruning can be built whenever [`Criterion::AlphaTargetCell`] holds,
+/// and sometimes even if it fails.
+#[derive(Debug, Clone)]
+pub enum CyclicPruning {
+    /// The cyclic pruning, checked to be equivalent to `C`. Its states are numbered as in
+    /// [`HdCharacteristics::minimal`].
+    Verified(DCW),
+    /// The cell `cells[cell]` (see [`HdCharacteristics::cells`]) that the pruning jumps into when
+    /// `state` reads `symbol` has several maxima. This is the first such jump found.
+    Ambiguous {
+        /// The state without a safe `symbol`-transition.
+        state: u32,
+        /// The letter.
+        symbol: char,
+        /// The index of the cell in [`HdCharacteristics::cells`].
+        cell: usize,
+    },
+    /// `C` has no `α`-transition from `state` on `symbol` to `target`, the maximum of the cell
+    /// that the pruning jumps into. This cannot happen if `C` is `α`-saturated, as the canonical
+    /// form of \[AK22, Theorem 4.6\] is.
+    NotSaturated {
+        /// The state without a safe `symbol`-transition.
+        state: u32,
+        /// The letter.
+        symbol: char,
+        /// The missing target.
+        target: u32,
+    },
+    /// The cyclic pruning could be built, but it is not equivalent to `C`. This would contradict
+    /// the sufficiency of the cell criterion, unless `C` is not normal.
+    NotEquivalent(DCW),
+}
+
+impl CyclicPruning {
+    /// The tDCW if the cyclic pruning is verified.
+    pub fn verified(&self) -> Option<&DCW> {
+        match self {
+            Self::Verified(dcw) => Some(dcw),
+            _ => None,
+        }
+    }
+
+    /// A short name, e.g. for CSV columns.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Verified(_) => "verified",
+            Self::Ambiguous { .. } => "ambiguous",
+            Self::NotSaturated { .. } => "not_saturated",
+            Self::NotEquivalent(_) => "NOT_EQUIVALENT",
+        }
+    }
+}
+
 /// Characteristics of the canonical minimal GFG-tNCW of a language concerning d-size = hd-size,
 /// as computed by [`NCW::hd_characteristics`].
 #[derive(Debug, Clone)]
@@ -80,11 +156,13 @@ pub struct HdCharacteristics {
     pub classes: Vec<Vec<u32>>,
     /// The safe components (SCCs of the safe transitions) of `C`, including trivial ones.
     pub components: Vec<Vec<u32>>,
-    /// The nonempty cells of `C`.
+    /// The nonempty cells of `C`, ordered by class and then by component.
     pub cells: Vec<Cell>,
+    /// The cyclic pruning of `C`.
+    pub cyclic: CyclicPruning,
     /// The number of candidate prunings (initial states times choices), saturating.
     pub prunings: u128,
-    /// The outcome of the pruning search.
+    /// The verified cyclic pruning if there is one, otherwise the outcome of the pruning search.
     pub pruning: Pruning,
 }
 
@@ -146,9 +224,11 @@ impl HdCharacteristics {
 impl NCW {
     /// Minimizes a copy of `self` (see [`NCW::minimize`]) and computes the characteristics of
     /// the resulting canonical minimal GFG-tNCW `C` that concern d-size = hd-size: its classes,
-    /// safe components and cells, the [`Criterion`]s, and whether `C` is DBP.
+    /// safe components and cells, the [`Criterion`]s, the [`CyclicPruning`], and whether `C` is
+    /// DBP.
     ///
-    /// The DBP search tries every initial state of the class of the initial state together with
+    /// If the cyclic pruning is verified, it is the result and there is no search. Otherwise the
+    /// DBP search tries every initial state of the class of the initial state together with
     /// every choice of one `α`-successor per state and letter, and checks the language
     /// containment of `C` in the pruned automaton with [`NCW::gfg_containment_relation`], which
     /// is exact here as the pruned automaton is deterministic. It is skipped if there are more
@@ -181,9 +261,9 @@ impl NCW {
         let subsafe = minimal.subsafe_equivalence_relation();
         let alpha_targets: BTreeSet<u32> = c.edges.iter().filter(|e| e.2).map(|e| e.3).collect();
         let mut cells = vec![];
-        for class in &classes {
+        for (class_index, class) in classes.iter().enumerate() {
             let alpha_target = class.iter().any(|q| alpha_targets.contains(q));
-            for component in &components {
+            for (component_index, component) in components.iter().enumerate() {
                 let states: Vec<u32> = class
                     .iter()
                     .copied()
@@ -198,6 +278,8 @@ impl NCW {
                     .collect();
                 if !states.is_empty() {
                     cells.push(Cell {
+                        class: class_index,
+                        component: component_index,
                         states,
                         maxima,
                         alpha_target,
@@ -215,7 +297,19 @@ impl NCW {
             .fold(initials.len() as u128, |acc, (_, targets)| {
                 acc.saturating_mul(targets.len() as u128)
             });
-        let pruning = if prunings > max_prunings {
+        let cyclic = c.cyclic_pruning(&classes, &components, &cells);
+        match &cyclic {
+            CyclicPruning::NotSaturated {
+                state,
+                symbol,
+                target,
+            } => warn!("C is not α-saturated: {state} -{symbol}=> {target} is missing"),
+            CyclicPruning::NotEquivalent(_) => warn!("the cyclic pruning is not equivalent to C"),
+            _ => {}
+        }
+        let pruning = if let Some(dcw) = cyclic.verified() {
+            Pruning::Found(dcw.clone())
+        } else if prunings > max_prunings {
             debug!("skipping DBP search over {prunings} prunings");
             Pruning::TooLarge
         } else {
@@ -227,10 +321,22 @@ impl NCW {
             classes,
             components,
             cells,
+            cyclic,
             prunings,
             pruning,
         })
     }
+}
+
+/// For each of `0..n`, the index of the block of `partition` that contains it.
+fn block_of(n: usize, partition: &[Vec<u32>]) -> Vec<usize> {
+    let mut block = vec![0; n];
+    for (i, states) in partition.iter().enumerate() {
+        for &q in states {
+            block[q as usize] = i;
+        }
+    }
+    block
 }
 
 /// Partitions `0..n` into the classes of the equivalence relation `equivalent`, each in
@@ -310,6 +416,15 @@ impl Indexed {
     /// The pairs `(q, σ)` without a safe `σ`-transition but with several `α`-transitions on
     /// `σ`, together with their targets.
     fn choice_points(&self) -> Vec<((u32, char), Vec<u32>)> {
+        self.dead_points()
+            .into_iter()
+            .filter(|(_, targets)| targets.len() > 1)
+            .collect()
+    }
+
+    /// The pairs `(q, σ)` without a safe `σ`-transition but with some `α`-transition on `σ`,
+    /// together with the targets of these `α`-transitions.
+    fn dead_points(&self) -> Vec<((u32, char), Vec<u32>)> {
         let mut alpha: BTreeMap<(u32, char), Vec<u32>> = BTreeMap::new();
         let mut safe = BTreeSet::new();
         for &(q, sym, color, p) in &self.edges {
@@ -321,8 +436,68 @@ impl Indexed {
         }
         alpha
             .into_iter()
-            .filter(|(key, targets)| targets.len() > 1 && !safe.contains(key))
+            .filter(|(key, _)| !safe.contains(key))
             .collect()
+    }
+
+    /// Builds the cyclic pruning (see [`CyclicPruning`]) from the classes, the safe components in
+    /// their cyclic order, and the cells, and checks it for equivalence.
+    fn cyclic_pruning(
+        &self,
+        classes: &[Vec<u32>],
+        components: &[Vec<u32>],
+        cells: &[Cell],
+    ) -> CyclicPruning {
+        let class_of = block_of(self.n, classes);
+        let component_of = block_of(self.n, components);
+        let cell_of: BTreeMap<(usize, usize), usize> = cells
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| ((cell.class, cell.component), i))
+            .collect();
+        let k = components.len();
+        let mut chosen: BTreeMap<(u32, char), u32> = BTreeMap::new();
+        for ((q, symbol), targets) in self.dead_points() {
+            let class = class_of[targets[0] as usize];
+            let own = component_of[q as usize];
+            // the cell of the first component after the one of `q` that meets the class; it
+            // exists, as the component of `targets[0]` meets the class
+            let Some(&cell) = (1..=k).find_map(|i| cell_of.get(&(class, (own + i) % k))) else {
+                continue;
+            };
+            let [target] = cells[cell].maxima[..] else {
+                return CyclicPruning::Ambiguous {
+                    state: q,
+                    symbol,
+                    cell,
+                };
+            };
+            if !targets.contains(&target) {
+                return CyclicPruning::NotSaturated {
+                    state: q,
+                    symbol,
+                    target,
+                };
+            }
+            chosen.insert((q, symbol), target);
+        }
+        let pruned = Self {
+            alphabet: self.alphabet.clone(),
+            n: self.n,
+            initial: self.initial,
+            edges: self
+                .edges
+                .iter()
+                .copied()
+                .filter(|&(q, sym, alpha, p)| !alpha || chosen.get(&(q, sym)) == Some(&p))
+                .collect(),
+        };
+        // the pruning is a sub-automaton of `self` with the same initial state
+        if self.contained_in(&pruned) {
+            CyclicPruning::Verified(pruned.dcw())
+        } else {
+            CyclicPruning::NotEquivalent(pruned.dcw())
+        }
     }
 
     /// The deterministic automaton with initial state `initial` that keeps every transition
@@ -412,7 +587,7 @@ impl Indexed {
 
 #[cfg(test)]
 mod tests {
-    use super::{Criterion, Pruning};
+    use super::{Criterion, CyclicPruning, Pruning};
     use crate::automaton::NCW;
     use crate::{Pointed, TransitionSystem};
 
@@ -436,6 +611,14 @@ mod tests {
         assert_eq!(hd.cells[0].maxima, vec![0, 1, 2]);
         assert_eq!(hd.prunings, 9);
         assert!(matches!(hd.pruning, Pruning::NotDbp));
+        assert!(matches!(
+            hd.cyclic,
+            CyclicPruning::Ambiguous {
+                state: 1,
+                symbol: 'a',
+                cell: 0
+            }
+        ));
         assert!(Criterion::ALL.iter().all(|&c| !hd.holds(c)));
         assert!(hd.only_sufficient().is_empty() && hd.refuted().is_empty());
     }
@@ -453,10 +636,85 @@ mod tests {
         assert_eq!(hd.cells.len(), 1);
         assert_eq!(hd.cells[0].maxima, vec![0, 1]);
         assert_eq!(hd.only_sufficient(), Criterion::ALL.to_vec());
+        assert!(matches!(hd.cyclic, CyclicPruning::Ambiguous { .. }));
         let Pruning::Found(dcw) = hd.pruning else {
             panic!("expected a pruning");
         };
         assert_eq!(dcw.size(), 2);
+    }
+
+    /// The example of the cyclic-pruning figure: Layer 1 is `p0 -b-> p0, p0 -a,c-> p1,
+    /// p1 -a-> p0, p1 -b,c-> p1`; `q0, q1, q3, q4` are children of `p0`, and `q2, q5` of `p1`.
+    /// The safe components `{q0, q1, q2}`, `{q3}`, `{q4, q5}` all have unique cell maxima, and
+    /// every missing safe transition has `α`-transitions to all children of the Layer-1
+    /// successor.
+    fn cyclic_example() -> NCW {
+        let p0 = [0, 1, 3, 4];
+        let p1 = [2, 5];
+        let mut alpha = vec![];
+        for (q, sym, children) in [
+            (0, 'c', &p1[..]),
+            (1, 'b', &p0[..]),
+            (1, 'c', &p1[..]),
+            (2, 'b', &p1[..]),
+            (2, 'c', &p1[..]),
+            (3, 'a', &p1[..]),
+            (3, 'c', &p1[..]),
+            (4, 'a', &p1[..]),
+            (4, 'b', &p0[..]),
+            (5, 'b', &p1[..]),
+            (5, 'c', &p1[..]),
+        ] {
+            alpha.extend(children.iter().map(|&p| (q, sym, true, p)));
+        }
+        NCW::builder()
+            .with_edges([(0, 'b', false, 1), (0, 'a', false, 2), (2, 'a', false, 0)])
+            .with_edges([(1, 'a', false, 2), (3, 'b', false, 3)])
+            .with_edges([(4, 'c', false, 5), (5, 'a', false, 4)])
+            .with_edges(alpha)
+            .into_ncw(0)
+    }
+
+    #[test]
+    fn cyclic_pruning_certifies_d_equals_hd_without_search() {
+        // 4 initial states times 2^9 * 4^2 choices; the search is disabled
+        let hd = cyclic_example().hd_characteristics(0).unwrap();
+        assert_eq!(hd.hd(), 6);
+        assert_eq!(hd.classes, vec![vec![0, 1, 3, 4], vec![2, 5]]);
+        assert_eq!(hd.components, vec![vec![0, 1, 2], vec![3], vec![4, 5]]);
+        assert_eq!(hd.prunings, 32768);
+        assert!(hd.holds(Criterion::Cell));
+        assert_eq!(hd.d_equals_hd(), Some(true));
+        let Some(dcw) = hd.cyclic.verified() else {
+            panic!("expected a verified cyclic pruning, got {:?}", hd.cyclic);
+        };
+        assert_eq!(dcw.size(), 6);
+        assert_eq!(dcw.initial(), 0);
+        let mut alpha: Vec<_> = dcw
+            .state_indices()
+            .flat_map(|q| dcw.transitions_from(q).collect::<Vec<_>>())
+            .filter(|t| t.2)
+            .map(|(q, sym, _, p)| (q, sym, p))
+            .collect();
+        alpha.sort();
+        // the jumps of the table in the figure: e.g. `q2` skips `{q3}` (no child of `p1`), and
+        // `q4 -b->` wraps around to the maximum `q0` of its cell, not to `q1`
+        assert_eq!(
+            alpha,
+            vec![
+                (0, 'c', 5),
+                (1, 'b', 3),
+                (1, 'c', 5),
+                (2, 'b', 5),
+                (2, 'c', 5),
+                (3, 'a', 5),
+                (3, 'c', 5),
+                (4, 'a', 2),
+                (4, 'b', 0),
+                (5, 'b', 2),
+                (5, 'c', 2),
+            ]
+        );
     }
 
     #[test]
@@ -467,6 +725,7 @@ mod tests {
             .into_ncw(0);
         let hd = ncw.hd_characteristics(1000).unwrap();
         assert!(Criterion::ALL.iter().all(|&c| hd.holds(c)));
+        assert!(hd.cyclic.verified().is_some());
         let Pruning::Found(dcw) = hd.pruning else {
             panic!("expected a pruning");
         };

@@ -25,3 +25,6 @@ CLAUDE.local.md
 
 # Source material (PDFs etc.), kept local only
 sources/
+
+# Output of the automata generator
+runs.csv

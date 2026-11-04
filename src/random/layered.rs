@@ -231,7 +231,7 @@ impl LayeredNcw {
         NCW::from_parts(ts, 0)
     }
 
-    /// Drops the safe transitions that leave their safe component (R4); by the children rule 
+    /// Drops the safe transitions that leave their safe component (R4); by the children rule
     /// (R2), they become `α`-transitions to the children of the Layer-1 successor.
     fn normalize(&mut self) {
         let n = self.size();
@@ -268,7 +268,7 @@ fn reachable(n: usize, source: usize, successors: impl Fn(usize) -> Vec<usize>) 
 mod tests {
     use super::{LayeredNcw, LayeredParameters};
     use crate::TransitionSystem;
-    use crate::automaton::{Criterion, Pruning};
+    use crate::automaton::{Criterion, CyclicPruning, Pruning};
     use rand::{SeedableRng, rngs::StdRng};
 
     /// The completed sketch of the 09-08 meeting: Layer 1 is `p0 -a-> p0, p0 -b-> p1,
@@ -368,10 +368,25 @@ mod tests {
             assert!(ncw.is_semantically_deterministic());
             let hd = ncw.hd_characteristics(2000).unwrap();
             assert!(hd.hd() <= layered.size());
-            // the cell criterion is proved sufficient
+            // the cell criterion is proved sufficient, and the cyclic pruning is the witness; it
+            // can be built as soon as the cells of `α`-target classes have unique maxima
             if hd.holds(Criterion::Cell) {
                 assert_eq!(hd.d_equals_hd(), Some(true), "seed {seed}");
             }
+            if hd.holds(Criterion::AlphaTargetCell) {
+                assert!(
+                    hd.cyclic.verified().is_some(),
+                    "seed {seed}: {:?}",
+                    hd.cyclic
+                );
+            }
+            assert!(
+                !matches!(
+                    hd.cyclic,
+                    CyclicPruning::NotSaturated { .. } | CyclicPruning::NotEquivalent(_)
+                ),
+                "seed {seed}"
+            );
             if hd.only_sufficient().contains(&Criterion::AlphaTargetCell) {
                 only_sufficient += 1;
             }
