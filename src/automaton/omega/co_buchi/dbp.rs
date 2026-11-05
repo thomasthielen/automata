@@ -33,7 +33,7 @@ pub enum Criterion {
     /// hd states.
     Cell,
     /// Like [`Criterion::Cell`], but only for cells whose class is the target of some
-    /// `α`-transition, as the cyclic pruning never jumps into any other class. Only sketched.
+    /// `α`-transition, as the cyclic pruning never jumps into any other class. Also sufficient.
     AlphaTargetCell,
 }
 
@@ -207,9 +207,8 @@ impl HdCharacteristics {
             .collect()
     }
 
-    /// The criteria that hold although `C` is not DBP. As [`Criterion::Trivial`] and
-    /// [`Criterion::Cell`] are proved sufficient, this can only contain
-    /// [`Criterion::AlphaTargetCell`], whose sufficiency is only sketched.
+    /// The criteria that hold although `C` is not DBP. As all criteria are proved sufficient,
+    /// this is empty unless the minimization or the DBP search is wrong.
     pub fn refuted(&self) -> Vec<Criterion> {
         if self.d_equals_hd() != Some(false) {
             return vec![];
