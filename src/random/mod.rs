@@ -186,17 +186,17 @@ pub fn generate_random_dcw(
     DCW::from_parts(dts, 0)
 }
 
-/// Generates a random safe deterministic GFG-[`NCW`], which is a valid input for
+/// Generates a random safe deterministic HD-[`NCW`], which is a valid input for
 /// [`NCW::minimize`]. It starts from a random DCW drawn by [`generate_random_dcw`] and, for each
 /// of its transitions `⟨q, σ, s⟩`, with probability `nondeterminism` adds an `α`-transition
 /// `⟨q, σ, p⟩` to a state `p ≠ s` drawn uniformly from those with `L(p) ⊆ L(s)`. If there is no
 /// such `p`, no transition is added.
 ///
-/// The added transitions neither change the language nor the GFGness of any state: an accepting
-/// run takes the (`α`-colored) added transitions only finitely often, and the last one,
-/// `⟨q, σ, p⟩`, can be replaced by `⟨q, σ, s⟩`, as the run continues in the DCW from `p` and
-/// `L(p) ⊆ L(s)`. Hence, the strategy that ignores all added transitions witnesses GFGness from
-/// every state. As only `α`-transitions are added, the result stays safe deterministic. Added
+/// The added transitions neither change the language nor the history determinism of any state:
+/// an accepting run takes the (`α`-colored) added transitions only finitely often, and the last
+/// one, `⟨q, σ, p⟩`, can be replaced by `⟨q, σ, s⟩`, as the run continues in the DCW from `p`
+/// and `L(p) ⊆ L(s)`. Hence, the strategy that ignores all added transitions witnesses history
+/// determinism from every state. As only `α`-transitions are added, the result stays safe deterministic. Added
 /// transitions to a `p` with `L(p) ⊊ L(s)` are not covering and are thus removed again by
 /// [`NCW::semantically_determinize`], whereas those with `L(p) = L(s)` are kept.
 ///
@@ -209,7 +209,7 @@ pub fn generate_random_ncw(
     rng: &mut impl Rng,
 ) -> NCW {
     let dcw = generate_random_dcw(symbols, size, alpha_probability, rng);
-    // exact, as every state of a DCW is GFG
+    // exact, as every state of a DCW is HD
     let mut contained_in: BTreeMap<DefaultIdType, Vec<DefaultIdType>> = BTreeMap::new();
     for (p, s) in dcw.gfg_containment_relation() {
         if p != s {

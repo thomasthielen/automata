@@ -1,4 +1,4 @@
-//! Random two-layer GFG-tNCWs, see [`LayeredNcw`].
+//! Random two-layer HD-tNCWs, see [`LayeredNcw`].
 
 use crate::alphabet::CharAlphabet;
 use crate::automaton::NCW;
@@ -36,7 +36,7 @@ impl Default for LayeredParameters {
     }
 }
 
-/// A two-layer GFG-tNCW, generalizing the canonical automaton `A≡L` of \[LW25, Definition 3.7\].
+/// A two-layer HD-tNCW, generalizing the canonical automaton `A≡L` of \[LW25, Definition 3.7\].
 ///
 /// Layer 1 is a complete deterministic transition system `τ` over the Layer-1 states `P`.
 /// Layer 2 consists of the states of the automaton, each with a parent in `P`, and is subject to
@@ -50,16 +50,16 @@ impl Default for LayeredParameters {
 /// with parent `[uv]`, and R1, R3 and R4 hold by definition, \[LW25, Lemma 3.15\] and
 /// \[LW25, Lemma 3.19\]. Unlike R2, `A≡L` is unsafe-saturated: it has the `α`-transitions to all
 /// children of `τ(parent(q), σ)` even if `q` has a safe `σ`-transition. Dropping them keeps the
-/// automaton `α`-homogeneous, as in \[AK22\], and does not affect GFGness: the proof of
+/// automaton `α`-homogeneous, as in \[AK22\], and does not affect history determinism: the proof of
 /// \[LW25, Lemma 2.2\] uses unsafe-saturation only for a state without a safe transition on the
 /// letter, which is exactly where R2 adds `α`-transitions, and the state it needs is among
 /// these targets, since all transitions are level by R1 and R2. Here, Layer 1 may be finer than
 /// `∼L`, and the states need not be pointed classes, i.e. the automaton need not be safe-minimal
 /// or safe-centralized.
 ///
-/// States with the same parent have the same language, and every state is GFG, so the result is
+/// States with the same parent have the same language, and every state is HD, so the result is
 /// a valid input for [`NCW::minimize`] and [`NCW::hd_characteristics`]. Every language of a
-/// GFG-tNCW has such a representation, as the canonical minimal GFG-tNCW is two-layered itself.
+/// HD-tNCW has such a representation, as the canonical minimal HD-tNCW is two-layered itself.
 ///
 /// The initial state is state 0, whose parent is the initial Layer-1 state 0.
 #[derive(Debug, Clone, PartialEq, Eq)]

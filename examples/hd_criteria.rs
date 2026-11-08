@@ -1,4 +1,4 @@
-//! Draws random two-layer GFG-tNCWs, minimizes them and checks the sufficient criteria for
+//! Draws random two-layer HD-tNCWs, minimizes them and checks the sufficient criteria for
 //! d-size = hd-size against an exact DBP search. Writes one CSV row per sample to stdout and a
 //! summary to stderr.
 //!

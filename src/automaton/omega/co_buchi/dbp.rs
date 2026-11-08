@@ -1,5 +1,5 @@
-//! Determinizability by pruning (DBP) of minimal GFG-tNCWs, and the sufficient criteria for
-//! d-size = hd-size that are checked on the canonical minimal GFG-tNCW `C` of a language.
+//! Determinizability by pruning (DBP) of minimal HD-tNCWs, and the sufficient criteria for
+//! d-size = hd-size that are checked on the canonical minimal HD-tNCW `C` of a language.
 //!
 //! A tDCW with `|C|` states exists iff `C` is DBP, i.e. iff removing `α`-transitions turns `C`
 //! into an equivalent deterministic automaton (the initial state may be moved to any state of
@@ -21,7 +21,7 @@ use crate::{DTS, NTS, Pointed, TransitionSystem, Void};
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, warn};
 
-/// A sufficient criterion for d-size = hd-size, checked on the canonical minimal GFG-tNCW `C`.
+/// A sufficient criterion for d-size = hd-size, checked on the canonical minimal HD-tNCW `C`.
 /// Each criterion implies the next one in [`Criterion::ALL`], so [`Criterion::AlphaTargetCell`]
 /// holds most often.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -51,7 +51,7 @@ impl Criterion {
     }
 }
 
-/// A cell of a nice GFG-tNCW: the states of one language class that lie in one safe component.
+/// A cell of a nice HD-tNCW: the states of one language class that lie in one safe component.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     /// The index of the class of the cell in [`HdCharacteristics::classes`].
@@ -79,7 +79,7 @@ pub enum Pruning {
     TooLarge,
 }
 
-/// The cyclic pruning of the canonical minimal GFG-tNCW `C` (Löding's cell criterion).
+/// The cyclic pruning of the canonical minimal HD-tNCW `C` (Löding's cell criterion).
 ///
 /// The safe components of `C` are ordered cyclically as in [`HdCharacteristics::components`].
 /// The pruning keeps every safe transition and the initial state of `C`. Where a state `q` has no
@@ -145,11 +145,11 @@ impl CyclicPruning {
     }
 }
 
-/// Characteristics of the canonical minimal GFG-tNCW of a language concerning d-size = hd-size,
+/// Characteristics of the canonical minimal HD-tNCW of a language concerning d-size = hd-size,
 /// as computed by [`NCW::hd_characteristics`].
 #[derive(Debug, Clone)]
 pub struct HdCharacteristics {
-    /// The canonical minimal GFG-tNCW `C`, i.e. the result of [`NCW::minimize`], with its states
+    /// The canonical minimal HD-tNCW `C`, i.e. the result of [`NCW::minimize`], with its states
     /// renumbered to `0..hd`.
     pub minimal: NCW,
     /// The language classes of `C`.
@@ -167,7 +167,7 @@ pub struct HdCharacteristics {
 }
 
 impl HdCharacteristics {
-    /// The size of a minimal GFG-tNCW for the language, the number of states of `C`.
+    /// The size of a minimal HD-tNCW for the language, the number of states of `C`.
     pub fn hd(&self) -> usize {
         self.minimal.size()
     }
@@ -222,7 +222,7 @@ impl HdCharacteristics {
 
 impl NCW {
     /// Minimizes a copy of `self` (see [`NCW::minimize`]) and computes the characteristics of
-    /// the resulting canonical minimal GFG-tNCW `C` that concern d-size = hd-size: its classes,
+    /// the resulting canonical minimal HD-tNCW `C` that concern d-size = hd-size: its classes,
     /// safe components and cells, the [`Criterion`]s, the [`CyclicPruning`], and whether `C` is
     /// DBP.
     ///
@@ -235,7 +235,7 @@ impl NCW {
     ///
     /// # Errors
     /// [`Error::InvalidInput`] if `self` is not safe deterministic, which [`NCW::minimize`]
-    /// requires. Like [`NCW::minimize`], this assumes that all states of `self` are GFG.
+    /// requires. Like [`NCW::minimize`], this assumes that all states of `self` are HD.
     pub fn hd_characteristics(&self, max_prunings: u128) -> Result<HdCharacteristics> {
         if !self.is_safe_deterministic() {
             return Err(Error::InvalidInput(
@@ -522,7 +522,7 @@ impl Indexed {
     }
 
     /// Returns `true` iff `L(self) ⊆ L(other)`, assuming that `other` is deterministic and all
-    /// states of `self` are GFG, so that the containment game is exact.
+    /// states of `self` are HD, so that the containment game is exact.
     fn contained_in(&self, other: &Self) -> bool {
         let mut union = Self {
             alphabet: self.alphabet.clone(),
@@ -590,7 +590,7 @@ mod tests {
     use crate::automaton::NCW;
     use crate::{Pointed, TransitionSystem};
 
-    /// The canonical minimal GFG-tNCW of `L₁ = Σ*(Σa + Σbb)^ω`: three equivalent states, one
+    /// The canonical minimal HD-tNCW of `L₁ = Σ*(Σa + Σbb)^ω`: three equivalent states, one
     /// safe component, and `α`-transitions to all of them.
     fn l1() -> NCW {
         let alpha = |q, sym| [0, 1, 2].map(|p| (q, sym, true, p));
