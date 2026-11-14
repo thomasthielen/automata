@@ -369,7 +369,7 @@ mod tests {
             let hd = ncw.hd_characteristics(2000).unwrap();
             assert!(hd.hd() <= layered.size());
             // the cell criterion is proved sufficient, and the cyclic pruning is the witness; it
-            // can be built as soon as the cells of `α`-target classes have unique maxima
+            // can be built as soon as the cells of `α`-target classes have a maximum
             if hd.holds(Criterion::Cell) {
                 assert_eq!(hd.d_equals_hd(), Some(true), "seed {seed}");
             }

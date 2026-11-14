@@ -28,9 +28,9 @@ use tracing::{debug, warn};
 pub enum Criterion {
     /// hd equals the number of language classes, so `C` is deterministic already.
     Trivial,
-    /// Every cell (see [`Cell`]) has exactly one maximum with respect to safe language
-    /// inclusion (Löding). Then the cyclic pruning (see [`CyclicPruning`]) yields a tDCW with
-    /// hd states.
+    /// Every cell (see [`Cell`]) has a maximum, i.e. a state whose safe language contains the
+    /// safe language of every other state of the cell (Löding). Then the cyclic pruning (see
+    /// [`CyclicPruning`]) yields a tDCW with hd states.
     Cell,
     /// Like [`Criterion::Cell`], but only for cells whose class is the target of some
     /// `α`-transition, as the cyclic pruning never jumps into any other class. Also sufficient.
@@ -63,6 +63,11 @@ pub struct Cell {
     /// The states of the cell whose safe language is not strictly contained in the safe language
     /// of another state of the cell, in increasing order.
     pub maxima: Vec<u32>,
+    /// The smallest maximum of the cell, i.e. the smallest state `m` with `x ≾ m` (the safe
+    /// language of `x` is contained in that of `m`) for every state `x` of the cell, if there is
+    /// one. As `C` is safe-minimal, a maximum is unique, and it exists iff `maxima` has exactly
+    /// one element.
+    pub maximum: Option<u32>,
     /// Whether some `α`-transition leads into the class of the cell.
     pub alpha_target: bool,
 }
@@ -83,7 +88,8 @@ pub enum Pruning {
 ///
 /// The safe components of `C` are ordered cyclically as in [`HdCharacteristics::components`].
 /// The pruning keeps every safe transition and the initial state of `C`. Where a state `q` has no
-/// safe `σ`-transition, it keeps only the `α`-transition to the maximum of the cell `(C′, S_j)`,
+/// safe `σ`-transition, it keeps only the `α`-transition to the maximum of the cell `(C′, S_j)`
+/// (see [`Cell::maximum`]),
 /// where `C′` is the class of the `σ`-successors of `q` and `S_j` is the first component after
 /// the one of `q` (cyclically, ending with the one of `q` itself) that contains states of `C′`.
 /// If the cell criterion holds, the pruning is equivalent to `C`: on an accepted word, from some
@@ -91,7 +97,7 @@ pub enum Pruning {
 /// reads the rest of the word safely. The cyclic order never skips `S*`, and once the run lands in
 /// `S*` on the maximum of a cell, it reads the rest of the word safely as well.
 ///
-/// Only the cells that the pruning jumps into need a unique maximum, and these are cells of
+/// Only the cells that the pruning jumps into need a maximum, and these are cells of
 /// `α`-target classes. So the pruning can be built whenever [`Criterion::AlphaTargetCell`] holds,
 /// and sometimes even if it fails.
 #[derive(Debug, Clone)]
@@ -100,8 +106,8 @@ pub enum CyclicPruning {
     /// [`HdCharacteristics::minimal`].
     Verified(DCW),
     /// The cell `cells[cell]` (see [`HdCharacteristics::cells`]) that the pruning jumps into when
-    /// `state` reads `symbol` has several maxima. This is the first such jump found.
-    Ambiguous {
+    /// `state` reads `symbol` has no maximum. This is the first such jump found.
+    NoMaximum {
         /// The state without a safe `symbol`-transition.
         state: u32,
         /// The letter.
@@ -138,7 +144,7 @@ impl CyclicPruning {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Verified(_) => "verified",
-            Self::Ambiguous { .. } => "ambiguous",
+            Self::NoMaximum { .. } => "no_maximum",
             Self::NotSaturated { .. } => "not_saturated",
             Self::NotEquivalent(_) => "NOT_EQUIVALENT",
         }
@@ -176,12 +182,12 @@ impl HdCharacteristics {
     pub fn holds(&self, criterion: Criterion) -> bool {
         match criterion {
             Criterion::Trivial => self.classes.len() == self.hd(),
-            Criterion::Cell => self.cells.iter().all(|c| c.maxima.len() == 1),
+            Criterion::Cell => self.cells.iter().all(|c| c.maximum.is_some()),
             Criterion::AlphaTargetCell => self
                 .cells
                 .iter()
                 .filter(|c| c.alpha_target)
-                .all(|c| c.maxima.len() == 1),
+                .all(|c| c.maximum.is_some()),
         }
     }
 
@@ -268,19 +274,24 @@ impl NCW {
                     .copied()
                     .filter(|q| component.contains(q))
                     .collect();
-                let strictly_below =
-                    |q: u32, t: u32| subsafe.contains(&(q, t)) && !subsafe.contains(&(t, q));
+                let below = |q: u32, t: u32| q == t || subsafe.contains(&(q, t));
+                let strictly_below = |q: u32, t: u32| below(q, t) && !below(t, q);
                 let maxima = states
                     .iter()
                     .copied()
                     .filter(|&q| !states.iter().any(|&t| strictly_below(q, t)))
                     .collect();
+                let maximum = states
+                    .iter()
+                    .copied()
+                    .find(|&m| states.iter().all(|&x| below(x, m)));
                 if !states.is_empty() {
                     cells.push(Cell {
                         class: class_index,
                         component: component_index,
                         states,
                         maxima,
+                        maximum,
                         alpha_target,
                     });
                 }
@@ -464,8 +475,8 @@ impl Indexed {
             let Some(&cell) = (1..=k).find_map(|i| cell_of.get(&(class, (own + i) % k))) else {
                 continue;
             };
-            let [target] = cells[cell].maxima[..] else {
-                return CyclicPruning::Ambiguous {
+            let Some(target) = cells[cell].maximum else {
+                return CyclicPruning::NoMaximum {
                     state: q,
                     symbol,
                     cell,
@@ -608,11 +619,12 @@ mod tests {
         assert_eq!(hd.classes, vec![vec![0, 1, 2]]);
         assert_eq!(hd.components, vec![vec![0, 1, 2]]);
         assert_eq!(hd.cells[0].maxima, vec![0, 1, 2]);
+        assert_eq!(hd.cells[0].maximum, None);
         assert_eq!(hd.prunings, 9);
         assert!(matches!(hd.pruning, Pruning::NotDbp));
         assert!(matches!(
             hd.cyclic,
-            CyclicPruning::Ambiguous {
+            CyclicPruning::NoMaximum {
                 state: 1,
                 symbol: 'a',
                 cell: 0
@@ -634,8 +646,9 @@ mod tests {
         assert_eq!(hd.hd(), 2);
         assert_eq!(hd.cells.len(), 1);
         assert_eq!(hd.cells[0].maxima, vec![0, 1]);
+        assert_eq!(hd.cells[0].maximum, None);
         assert_eq!(hd.only_sufficient(), Criterion::ALL.to_vec());
-        assert!(matches!(hd.cyclic, CyclicPruning::Ambiguous { .. }));
+        assert!(matches!(hd.cyclic, CyclicPruning::NoMaximum { .. }));
         let Pruning::Found(dcw) = hd.pruning else {
             panic!("expected a pruning");
         };
@@ -644,7 +657,7 @@ mod tests {
 
     /// The example of the cyclic-pruning figure: Layer 1 is `p0 -b-> p0, p0 -a,c-> p1,
     /// p1 -a-> p0, p1 -b,c-> p1`; `q0, q1, q3, q4` are children of `p0`, and `q2, q5` of `p1`.
-    /// The safe components `{q0, q1, q2}`, `{q3}`, `{q4, q5}` all have unique cell maxima, and
+    /// The safe components `{q0, q1, q2}`, `{q3}`, `{q4, q5}`: every cell has a maximum, and
     /// every missing safe transition has `α`-transitions to all children of the Layer-1
     /// successor.
     fn cyclic_example() -> NCW {
@@ -683,6 +696,9 @@ mod tests {
         assert_eq!(hd.components, vec![vec![0, 1, 2], vec![3], vec![4, 5]]);
         assert_eq!(hd.prunings, 32768);
         assert!(hd.holds(Criterion::Cell));
+        // the only cell with several states is `{q0, q1}`, with maximum `q0`
+        let cell = hd.cells.iter().find(|c| c.states == [0, 1]).unwrap();
+        assert_eq!(cell.maximum, Some(0));
         assert_eq!(hd.d_equals_hd(), Some(true));
         let Some(dcw) = hd.cyclic.verified() else {
             panic!("expected a verified cyclic pruning, got {:?}", hd.cyclic);

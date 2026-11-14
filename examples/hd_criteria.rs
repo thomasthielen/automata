@@ -12,7 +12,7 @@
 //! `1..=layer1`), `children` (3), `safe` (0.75), `max_prunings` (3000). The flag `spot` checks
 //! every pruning that shows a criterion to be only sufficient with Spot's `autfilt`.
 //!
-//! The column `cyclic` is the outcome of the cyclic pruning (`verified`, `ambiguous`,
+//! The column `cyclic` is the outcome of the cyclic pruning (`verified`, `no_maximum`,
 //! `not_saturated`, `NOT_EQUIVALENT`). A verified cyclic pruning replaces the search, so
 //! `max_prunings` only limits the instances where it fails.
 //!
