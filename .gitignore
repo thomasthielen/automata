@@ -27,4 +27,4 @@ CLAUDE.local.md
 sources/
 
 # Output of the automata generator
-runs.csv
+*.csv

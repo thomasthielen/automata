@@ -22,19 +22,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, warn};
 
 /// A sufficient criterion for d-size = hd-size, checked on the canonical minimal HD-tNCW `C`.
-/// [`Criterion::Trivial`] implies [`Criterion::Cell`], which implies both
-/// [`Criterion::AlphaTargetCell`] and [`Criterion::Successor`].
+/// [`Criterion::Residual`] implies [`Criterion::Cell`], which implies [`Criterion::Successor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Criterion {
-    /// hd equals the number of language classes, so `C` is deterministic already.
-    Trivial,
+    /// hd equals the number of language classes (residuals), so `C` is deterministic already.
+    Residual,
     /// Every cell (see [`Cell`]) has a maximum, i.e. a state whose safe language contains the
     /// safe language of every other state of the cell (Löding). Then the cyclic pruning (see
     /// [`CyclicPruning`]) yields a tDCW with hd states.
     Cell,
-    /// Like [`Criterion::Cell`], but only for cells whose class is the target of some
-    /// `α`-transition, as the cyclic pruning never jumps into any other class. Also sufficient.
-    AlphaTargetCell,
     /// For every class `K`, every letter `σ` on which some state of `K` has no safe transition,
     /// and every cell `X` of `K`, the safe `σ`-successors of the maximal states of `X` (see
     /// [`Cell::maxima`]) are pairwise strongly equivalent, i.e. equal, as `C` is safe-minimal.
@@ -44,19 +40,13 @@ pub enum Criterion {
 
 impl Criterion {
     /// All criteria.
-    pub const ALL: [Criterion; 4] = [
-        Self::Trivial,
-        Self::Cell,
-        Self::AlphaTargetCell,
-        Self::Successor,
-    ];
+    pub const ALL: [Criterion; 3] = [Self::Residual, Self::Cell, Self::Successor];
 
     /// A short name, e.g. for column headers.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Trivial => "trivial",
+            Self::Residual => "residual",
             Self::Cell => "cell",
-            Self::AlphaTargetCell => "alpha_target_cell",
             Self::Successor => "successor",
         }
     }
@@ -79,8 +69,6 @@ pub struct Cell {
     /// one. As `C` is safe-minimal, a maximum is unique, and it exists iff `maxima` has exactly
     /// one element.
     pub maximum: Option<u32>,
-    /// Whether some `α`-transition leads into the class of the cell.
-    pub alpha_target: bool,
 }
 
 /// Outcome of the search for a deterministic pruning, see [`NCW::hd_characteristics`].
@@ -108,21 +96,16 @@ pub enum Pruning {
 /// reads the rest of the word safely. The cyclic order never skips `S*`, and once the run lands in
 /// `S*` on the maximum of a cell, it reads the rest of the word safely as well.
 ///
-/// Only the cells that the pruning jumps into need a maximum, and these are cells of
-/// `α`-target classes. So the pruning can be built whenever [`Criterion::AlphaTargetCell`] holds,
-/// and sometimes even if it fails.
+/// The cyclic pruning is defined only if the cell criterion holds, so it is verified iff
+/// [`Criterion::Cell`] holds (unless `C` is not normal).
 #[derive(Debug, Clone)]
 pub enum CyclicPruning {
     /// The cyclic pruning, checked to be equivalent to `C`. Its states are numbered as in
     /// [`HdCharacteristics::minimal`].
     Verified(DCW),
-    /// The cell `cells[cell]` (see [`HdCharacteristics::cells`]) that the pruning jumps into when
-    /// `state` reads `symbol` has no maximum. This is the first such jump found.
+    /// [`Criterion::Cell`] fails: the cell `cells[cell]` (see [`HdCharacteristics::cells`]) has
+    /// no maximum. This is the first such cell.
     NoMaximum {
-        /// The state without a safe `symbol`-transition.
-        state: u32,
-        /// The letter.
-        symbol: char,
         /// The index of the cell in [`HdCharacteristics::cells`].
         cell: usize,
     },
@@ -261,13 +244,8 @@ impl HdCharacteristics {
     /// Returns `true` iff the given criterion holds.
     pub fn holds(&self, criterion: Criterion) -> bool {
         match criterion {
-            Criterion::Trivial => self.classes.len() == self.hd(),
+            Criterion::Residual => self.classes.len() == self.hd(),
             Criterion::Cell => self.cells.iter().all(|c| c.maximum.is_some()),
-            Criterion::AlphaTargetCell => self
-                .cells
-                .iter()
-                .filter(|c| c.alpha_target)
-                .all(|c| c.maximum.is_some()),
             Criterion::Successor => !matches!(self.successor, SuccessorPruning::Ambiguous { .. }),
         }
     }
@@ -346,10 +324,8 @@ impl NCW {
         });
 
         let subsafe = minimal.subsafe_equivalence_relation();
-        let alpha_targets: BTreeSet<u32> = c.edges.iter().filter(|e| e.2).map(|e| e.3).collect();
         let mut cells = vec![];
         for (class_index, class) in classes.iter().enumerate() {
-            let alpha_target = class.iter().any(|q| alpha_targets.contains(q));
             for (component_index, component) in components.iter().enumerate() {
                 let states: Vec<u32> = class
                     .iter()
@@ -374,7 +350,6 @@ impl NCW {
                         states,
                         maxima,
                         maximum,
-                        alpha_target,
                     });
                 }
             }
@@ -549,6 +524,10 @@ impl Indexed {
         components: &[Vec<u32>],
         cells: &[Cell],
     ) -> CyclicPruning {
+        // the cyclic pruning is defined only if every cell has a maximum (cell criterion)
+        if let Some(cell) = cells.iter().position(|c| c.maximum.is_none()) {
+            return CyclicPruning::NoMaximum { cell };
+        }
         let class_of = block_of(self.n, classes);
         let component_of = block_of(self.n, components);
         let cell_of: BTreeMap<(usize, usize), usize> = cells
@@ -567,11 +546,7 @@ impl Indexed {
                 continue;
             };
             let Some(target) = cells[cell].maximum else {
-                return CyclicPruning::NoMaximum {
-                    state: q,
-                    symbol,
-                    cell,
-                };
+                return CyclicPruning::NoMaximum { cell };
             };
             if !targets.contains(&target) {
                 return CyclicPruning::NotSaturated {
@@ -805,14 +780,7 @@ mod tests {
         assert_eq!(hd.cells[0].maximum, None);
         assert_eq!(hd.prunings, 9);
         assert!(matches!(hd.pruning, Pruning::NotDbp));
-        assert!(matches!(
-            hd.cyclic,
-            CyclicPruning::NoMaximum {
-                state: 1,
-                symbol: 'a',
-                cell: 0
-            }
-        ));
+        assert!(matches!(hd.cyclic, CyclicPruning::NoMaximum { cell: 0 }));
         assert!(Criterion::ALL.iter().all(|&c| !hd.holds(c)));
         assert!(hd.only_sufficient().is_empty() && hd.refuted().is_empty());
     }
@@ -845,11 +813,7 @@ mod tests {
         assert_eq!(hd.cells[0].maximum, None);
         assert_eq!(
             hd.only_sufficient(),
-            vec![
-                Criterion::Trivial,
-                Criterion::Cell,
-                Criterion::AlphaTargetCell
-            ]
+            vec![Criterion::Residual, Criterion::Cell]
         );
         assert!(matches!(hd.cyclic, CyclicPruning::NoMaximum { .. }));
         let Some(dcw) = hd.successor.verified() else {

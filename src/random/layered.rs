@@ -300,7 +300,7 @@ mod tests {
             .unwrap();
         assert_eq!(hd.hd(), 8);
         assert_eq!(hd.classes.len(), 3);
-        assert!(!hd.holds(Criterion::Cell) && !hd.holds(Criterion::AlphaTargetCell));
+        assert!(!hd.holds(Criterion::Cell));
         let Pruning::Found(dcw) = &hd.pruning else {
             panic!("the completed sketch is DBP");
         };
@@ -368,12 +368,9 @@ mod tests {
             assert!(ncw.is_semantically_deterministic());
             let hd = ncw.hd_characteristics(2000).unwrap();
             assert!(hd.hd() <= layered.size());
-            // the cell criterion is proved sufficient, and the cyclic pruning is the witness; it
-            // can be built as soon as the cells of `α`-target classes have a maximum
+            // the cell criterion is proved sufficient, and the cyclic pruning is the witness
             if hd.holds(Criterion::Cell) {
                 assert_eq!(hd.d_equals_hd(), Some(true), "seed {seed}");
-            }
-            if hd.holds(Criterion::AlphaTargetCell) {
                 assert!(
                     hd.cyclic.verified().is_some(),
                     "seed {seed}: {:?}",
@@ -406,7 +403,7 @@ mod tests {
                 ),
                 "seed {seed}"
             );
-            if hd.only_sufficient().contains(&Criterion::AlphaTargetCell) {
+            if hd.only_sufficient().contains(&Criterion::Cell) {
                 only_sufficient += 1;
             }
         }

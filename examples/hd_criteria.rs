@@ -1,36 +1,58 @@
 //! Draws random two-layer HD-tNCWs, minimizes them and checks the sufficient criteria for
-//! d-size = hd-size against an exact DBP search. Writes one CSV row per sample to stdout and a
-//! summary to stderr.
+//! d-size = hd-size against an exact DBP search. Writes one CSV row per sample (UTF-8) to stdout
+//! or to the file given by `out`, and a summary to stderr.
 //!
 //! ```shell
-//! cargo run --release --features random --example hd_criteria -- samples=1500 layer1=4
+//! cargo run --release --features random --example hd_criteria -- samples=1500 out=hd.csv
 //! cargo run --release --features spot,random --example hd_criteria -- spot   # also asks Spot
 //! ```
 //!
 //! Arguments (all optional, as `key=value`): `samples` (default 1000), `seed` (0; sample `i` uses
 //! seed `seed + i`), `symbols` (2), `layer1` (4; the Layer-1 size of each sample is drawn from
-//! `1..=layer1`), `children` (3), `safe` (0.75), `max_prunings` (3000). The flag `spot` checks
-//! every pruning that shows a criterion to be only sufficient with Spot's `autfilt`.
+//! `1..=layer1`), `children` (3), `safe` (0.75), `max_prunings` (3000), `out` (stdout). Flags:
+//! `spot` checks every witness for d = hd with Spot's `autfilt` whenever some criterion fails
+//! although d = hd (adds the column `spot`); `automata` adds the columns `minimal_hd_tncw` and
+//! `minimal_tdcw`.
 //!
-//! The column `cyclic` is the outcome of the cyclic pruning (`verified`, `no_maximum`,
-//! `not_saturated`, `NOT_EQUIVALENT`), and `successor_pruning` that of the successor pruning
-//! (`verified`, `ambiguous`, `not_saturated`, `NOT_EQUIVALENT`). A verified cyclic or successor
-//! pruning replaces the search, so `max_prunings` only limits the instances where both fail.
+//! Columns:
+//! - `seed`: the seed of the sample; `layer1_size`, `ncw_size`: Layer-1 size and number of states
+//!   of the generated tNCW.
+//! - `hd`: number of states of the canonical minimal HD-tNCW `C`; `classes`, `safe_components`,
+//!   `cells`: its language classes, safe components and nonempty cells; `max_maximal_states`:
+//!   the largest number of maximal states of a cell (a cell has a maximum iff this is 1).
+//! - `residual`, `cell`, `successor`: whether the criterion holds (`1`/`0`).
+//! - `d_eq_hd`: `1` if `C` is DBP (d = hd), `0` if not (d > hd), empty if the search was skipped
+//!   as there are more than `max_prunings` candidate prunings (`candidate_prunings`).
+//! - `witness`: what certifies d = hd: the cyclic pruning (`cell`), the successor pruning
+//!   (`successor`) or the search (`search`); empty if d > hd or undecided.
+//! - `minimal_hd_tncw` is `C`, and `minimal_tdcw` the witness (same state numbering), written as
+//!   `init q` followed by the transitions `q-σ->p` (safe) and `q-σ=>p` (`α`).
 //!
-//! The last two columns are `minimal_hd_tncw`, the canonical minimal HD-tNCW `C`, and
-//! `minimal_tdcw`, which is filled only if `C` is DBP: a pruning of `C` (same state numbering)
-//! with hd states, so a minimal tDCW and a witness for d = hd. Both are written as `init q`
-//! followed by the transitions `q-σ->p` (safe) and `q-σ=>p` (`α`).
+//! Anomalies, i.e. a pruning that is not equivalent or not `α`-saturated, or a criterion that
+//! holds although d > hd, would contradict the thesis; they are reported on stderr.
 
 use automata::alphabet::CharAlphabet;
-use automata::automaton::{Criterion, HdCharacteristics, Pruning};
+use automata::automaton::{Criterion, CyclicPruning, HdCharacteristics, Pruning, SuccessorPruning};
 use automata::random::{LayeredNcw, LayeredParameters};
 use automata::{Pointed, TransitionSystem};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::collections::BTreeMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
     let mut args: BTreeMap<String, String> = BTreeMap::new();
     for arg in std::env::args().skip(1) {
         let (key, value) = arg.split_once('=').unwrap_or((&arg, ""));
@@ -53,80 +75,145 @@ fn main() -> ExitCode {
     };
     let spot = args.contains_key("spot");
     if spot && !cfg!(feature = "spot") {
-        eprintln!("the flag `spot` needs the feature `spot`");
-        return ExitCode::FAILURE;
+        return Err("the flag `spot` needs the feature `spot`".into());
     }
+    let automata = args.contains_key("automata");
+    let mut out: Box<dyn Write> = match args.get("out") {
+        Some(path) if !path.is_empty() => Box::new(BufWriter::new(File::create(path)?)),
+        _ => Box::new(BufWriter::new(std::io::stdout().lock())),
+    };
 
-    println!(
-        "sample,seed,layer1,size,hd,classes,components,cells,max_maxima,{},cyclic,successor_pruning,prunings,d_eq_hd,only_sufficient,spot,minimal_hd_tncw,minimal_tdcw",
-        Criterion::ALL.map(|c| c.name()).join(",")
-    );
+    let mut header = vec![
+        "seed",
+        "layer1_size",
+        "ncw_size",
+        "hd",
+        "classes",
+        "safe_components",
+        "cells",
+        "max_maximal_states",
+    ];
+    header.extend(Criterion::ALL.map(|c| c.name()));
+    header.extend(["d_eq_hd", "witness", "candidate_prunings"]);
+    if spot {
+        header.push("spot");
+    }
+    if automata {
+        header.extend(["minimal_hd_tncw", "minimal_tdcw"]);
+    }
+    writeln!(out, "{}", header.join(","))?;
+
     let mut summary = Summary::default();
     for sample in 0..samples {
-        let rng = &mut StdRng::seed_from_u64(seed + sample);
+        let seed = seed + sample;
+        let rng = &mut StdRng::seed_from_u64(seed);
         let parameters = LayeredParameters {
             layer1_size: rng.gen_range(1..=layer1.max(1)),
             ..parameters
         };
-        let layered = match LayeredNcw::random(parameters, rng) {
-            Ok(layered) => layered,
-            Err(e) => {
-                eprintln!("invalid parameters: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+        let layered =
+            LayeredNcw::random(parameters, rng).map_err(|e| format!("invalid parameters: {e}"))?;
         let ncw = layered.to_ncw();
-        let hd = match ncw.hd_characteristics(max_prunings) {
-            Ok(hd) => hd,
-            Err(e) => {
-                eprintln!("sample {sample}: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-        let only_sufficient = hd.only_sufficient();
-        let spot_check = if spot && !only_sufficient.is_empty() {
+        let hd = ncw
+            .hd_characteristics(max_prunings)
+            .map_err(|e| format!("seed {seed}: {e}"))?;
+        for anomaly in anomalies(&hd) {
+            eprintln!("seed {seed}: {anomaly}");
+            summary.anomalies += 1;
+        }
+        let spot_check = if spot && !hd.only_sufficient().is_empty() {
             spot_equivalent(&ncw, &hd.pruning)
         } else {
-            String::new()
+            ""
         };
-        summary.add(&hd, &spot_check);
-        println!(
-            "{sample},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{spot_check},{},{}",
-            seed + sample,
-            layered.layer1_size(),
-            layered.size(),
-            hd.hd(),
-            hd.classes.len(),
-            hd.components.len(),
-            hd.cells.len(),
-            hd.cells.iter().map(|c| c.maxima.len()).max().unwrap_or(0),
-            Criterion::ALL
-                .map(|c| hd.holds(c))
-                .map(|b| b as u8)
-                .map(|b| b.to_string())
-                .join(","),
-            hd.cyclic.name(),
-            hd.successor.name(),
-            hd.prunings,
-            match hd.d_equals_hd() {
-                Some(true) => "yes",
-                Some(false) => "no",
-                None => "unknown",
-            },
-            only_sufficient
+        summary.add(&hd, spot_check);
+
+        let mut row = vec![
+            seed.to_string(),
+            layered.layer1_size().to_string(),
+            layered.size().to_string(),
+            hd.hd().to_string(),
+            hd.classes.len().to_string(),
+            hd.components.len().to_string(),
+            hd.cells.len().to_string(),
+            hd.cells
                 .iter()
-                .map(|c| c.name())
-                .collect::<Vec<_>>()
-                .join(" "),
-            transitions(&hd.minimal),
-            match &hd.pruning {
+                .map(|c| c.maxima.len())
+                .max()
+                .unwrap_or(0)
+                .to_string(),
+        ];
+        row.extend(Criterion::ALL.map(|c| (hd.holds(c) as u8).to_string()));
+        row.push(match hd.d_equals_hd() {
+            Some(d_eq_hd) => (d_eq_hd as u8).to_string(),
+            None => String::new(),
+        });
+        row.push(witness(&hd).to_string());
+        row.push(hd.prunings.to_string());
+        if spot {
+            row.push(spot_check.to_string());
+        }
+        if automata {
+            row.push(transitions(&hd.minimal));
+            row.push(match &hd.pruning {
                 Pruning::Found(dcw) => transitions(dcw),
                 _ => String::new(),
-            },
-        );
+            });
+        }
+        writeln!(out, "{}", row.join(","))?;
     }
+    out.flush()?;
     summary.print(samples);
-    ExitCode::SUCCESS
+    Ok(())
+}
+
+/// What certifies d = hd: `cell` (the cyclic pruning), `successor` (the successor pruning),
+/// `search`, or `""` if d > hd or the search was skipped.
+fn witness(hd: &HdCharacteristics) -> &'static str {
+    if hd.cyclic.verified().is_some() {
+        "cell"
+    } else if hd.successor.verified().is_some() {
+        "successor"
+    } else if let Pruning::Found(_) = hd.pruning {
+        "search"
+    } else {
+        ""
+    }
+}
+
+/// Outcomes that contradict the thesis (or indicate a bug).
+fn anomalies(hd: &HdCharacteristics) -> Vec<String> {
+    let mut anomalies = vec![];
+    match &hd.cyclic {
+        CyclicPruning::NotSaturated {
+            state,
+            symbol,
+            target,
+        } => anomalies.push(format!(
+            "C is not α-saturated: {state} -{symbol}=> {target} is missing (cyclic pruning)"
+        )),
+        CyclicPruning::NotEquivalent(_) => {
+            anomalies.push("the cyclic pruning is not equivalent to C".into())
+        }
+        _ => {}
+    }
+    match &hd.successor {
+        SuccessorPruning::NotSaturated {
+            state,
+            symbol,
+            target,
+        } => anomalies.push(format!(
+            "C is not α-saturated: {state} -{symbol}=> {target} is missing (successor pruning)"
+        )),
+        SuccessorPruning::NotEquivalent(_) => {
+            anomalies.push("the successor pruning is not equivalent to C".into())
+        }
+        _ => {}
+    }
+    for c in hd.refuted() {
+        anomalies.push(format!("the {} criterion holds although d > hd", c.name()));
+    }
+    anomalies
 }
 
 /// The transitions of an automaton as `q-σ->p` (safe) and `q-σ=>p` (`α`), initial state first.
@@ -145,23 +232,23 @@ where
 }
 
 #[cfg(feature = "spot")]
-fn spot_equivalent(ncw: &automata::automaton::NCW, pruning: &Pruning) -> String {
+fn spot_equivalent(ncw: &automata::automaton::NCW, pruning: &Pruning) -> &'static str {
     let Pruning::Found(dcw) = pruning else {
-        return String::new();
+        return "";
     };
     match automata::spot::Spot::from_env().equivalent(ncw, dcw) {
-        Ok(true) => "equivalent".into(),
-        Ok(false) => "DIFFERENT".into(),
+        Ok(true) => "equivalent",
+        Ok(false) => "DIFFERENT",
         Err(e) => {
             eprintln!("Spot failed: {e}");
-            "error".into()
+            "error"
         }
     }
 }
 
 #[cfg(not(feature = "spot"))]
-fn spot_equivalent(_: &automata::automaton::NCW, _: &Pruning) -> String {
-    String::new()
+fn spot_equivalent(_: &automata::automaton::NCW, _: &Pruning) -> &'static str {
+    ""
 }
 
 #[derive(Default)]
@@ -169,12 +256,11 @@ struct Summary {
     dbp: usize,
     not_dbp: usize,
     unknown: usize,
-    /// per criterion: (holds, fails although d = hd, holds although d > hd)
-    criteria: BTreeMap<Criterion, (usize, usize, usize)>,
-    /// outcomes of the cyclic pruning
-    cyclic: BTreeMap<&'static str, usize>,
-    /// outcomes of the successor pruning
-    successor: BTreeMap<&'static str, usize>,
+    /// per criterion: (holds, fails although d = hd)
+    criteria: BTreeMap<Criterion, (usize, usize)>,
+    /// samples with d = hd per witness
+    witnesses: BTreeMap<&'static str, usize>,
+    anomalies: usize,
     spot_confirmed: usize,
     spot_disagrees: usize,
 }
@@ -186,14 +272,16 @@ impl Summary {
             Some(false) => self.not_dbp += 1,
             None => self.unknown += 1,
         }
+        let only_sufficient = hd.only_sufficient();
         for c in Criterion::ALL {
             let entry = self.criteria.entry(c).or_default();
             entry.0 += hd.holds(c) as usize;
-            entry.1 += hd.only_sufficient().contains(&c) as usize;
-            entry.2 += hd.refuted().contains(&c) as usize;
+            entry.1 += only_sufficient.contains(&c) as usize;
         }
-        *self.cyclic.entry(hd.cyclic.name()).or_default() += 1;
-        *self.successor.entry(hd.successor.name()).or_default() += 1;
+        let witness = witness(hd);
+        if !witness.is_empty() {
+            *self.witnesses.entry(witness).or_default() += 1;
+        }
         self.spot_confirmed += (spot == "equivalent") as usize;
         self.spot_disagrees += (spot == "DIFFERENT" || spot == "error") as usize;
     }
@@ -203,24 +291,21 @@ impl Summary {
             "{samples} samples: d = hd {}, d > hd {}, undecided {}",
             self.dbp, self.not_dbp, self.unknown
         );
-        for (c, (holds, only_sufficient, refuted)) in &self.criteria {
+        for (c, (holds, only_sufficient)) in &self.criteria {
             eprintln!(
-                "  {:<18} holds {holds:>5} | fails although d = hd {only_sufficient:>5} | holds although d > hd {refuted:>3}",
+                "  {:<10} holds {holds:>6} | fails although d = hd {only_sufficient:>6}",
                 c.name()
             );
         }
-        let cyclic: Vec<String> = self
-            .cyclic
+        let witnesses: Vec<String> = self
+            .witnesses
             .iter()
             .map(|(name, count)| format!("{name} {count}"))
             .collect();
-        eprintln!("  cyclic pruning: {}", cyclic.join(", "));
-        let successor: Vec<String> = self
-            .successor
-            .iter()
-            .map(|(name, count)| format!("{name} {count}"))
-            .collect();
-        eprintln!("  successor pruning: {}", successor.join(", "));
+        eprintln!("  witness for d = hd: {}", witnesses.join(", "));
+        if self.anomalies > 0 {
+            eprintln!("  ANOMALIES: {}", self.anomalies);
+        }
         if self.spot_confirmed + self.spot_disagrees > 0 {
             eprintln!(
                 "  Spot: {} witnesses equivalent, {} different or failed",

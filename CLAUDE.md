@@ -17,7 +17,7 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo test --features spot spot:: -- --ignored   # Spot tests, need autfilt (via WSL on Windows)
-cargo run --release --features random --example hd_criteria -- samples=1500   # CSV sweep: criteria vs. DBP; flag `spot` (feature spot) confirms witnesses
+cargo run --release --features random --example hd_criteria -- samples=1500 out=hd.csv   # CSV sweep: criteria vs. DBP; flags `spot` (feature spot, confirms witnesses), `automata` (adds C and the witness)
 ./scripts/check                    # same as CI: fmt, clippy, doc, per-feature check (needs cargo-hack), tests in three feature configurations
 ```
 
