@@ -13,8 +13,9 @@
 //! every pruning that shows a criterion to be only sufficient with Spot's `autfilt`.
 //!
 //! The column `cyclic` is the outcome of the cyclic pruning (`verified`, `no_maximum`,
-//! `not_saturated`, `NOT_EQUIVALENT`). A verified cyclic pruning replaces the search, so
-//! `max_prunings` only limits the instances where it fails.
+//! `not_saturated`, `NOT_EQUIVALENT`), and `successor_pruning` that of the successor pruning
+//! (`verified`, `ambiguous`, `not_saturated`, `NOT_EQUIVALENT`). A verified cyclic or successor
+//! pruning replaces the search, so `max_prunings` only limits the instances where both fail.
 //!
 //! The last two columns are `minimal_hd_tncw`, the canonical minimal HD-tNCW `C`, and
 //! `minimal_tdcw`, which is filled only if `C` is DBP: a pruning of `C` (same state numbering)
@@ -57,7 +58,7 @@ fn main() -> ExitCode {
     }
 
     println!(
-        "sample,seed,layer1,size,hd,classes,components,cells,max_maxima,{},cyclic,prunings,d_eq_hd,only_sufficient,spot,minimal_hd_tncw,minimal_tdcw",
+        "sample,seed,layer1,size,hd,classes,components,cells,max_maxima,{},cyclic,successor_pruning,prunings,d_eq_hd,only_sufficient,spot,minimal_hd_tncw,minimal_tdcw",
         Criterion::ALL.map(|c| c.name()).join(",")
     );
     let mut summary = Summary::default();
@@ -90,7 +91,7 @@ fn main() -> ExitCode {
         };
         summary.add(&hd, &spot_check);
         println!(
-            "{sample},{},{},{},{},{},{},{},{},{},{},{},{},{},{spot_check},{},{}",
+            "{sample},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{spot_check},{},{}",
             seed + sample,
             layered.layer1_size(),
             layered.size(),
@@ -105,6 +106,7 @@ fn main() -> ExitCode {
                 .map(|b| b.to_string())
                 .join(","),
             hd.cyclic.name(),
+            hd.successor.name(),
             hd.prunings,
             match hd.d_equals_hd() {
                 Some(true) => "yes",
@@ -171,6 +173,8 @@ struct Summary {
     criteria: BTreeMap<Criterion, (usize, usize, usize)>,
     /// outcomes of the cyclic pruning
     cyclic: BTreeMap<&'static str, usize>,
+    /// outcomes of the successor pruning
+    successor: BTreeMap<&'static str, usize>,
     spot_confirmed: usize,
     spot_disagrees: usize,
 }
@@ -189,6 +193,7 @@ impl Summary {
             entry.2 += hd.refuted().contains(&c) as usize;
         }
         *self.cyclic.entry(hd.cyclic.name()).or_default() += 1;
+        *self.successor.entry(hd.successor.name()).or_default() += 1;
         self.spot_confirmed += (spot == "equivalent") as usize;
         self.spot_disagrees += (spot == "DIFFERENT" || spot == "error") as usize;
     }
@@ -210,6 +215,12 @@ impl Summary {
             .map(|(name, count)| format!("{name} {count}"))
             .collect();
         eprintln!("  cyclic pruning: {}", cyclic.join(", "));
+        let successor: Vec<String> = self
+            .successor
+            .iter()
+            .map(|(name, count)| format!("{name} {count}"))
+            .collect();
+        eprintln!("  successor pruning: {}", successor.join(", "));
         if self.spot_confirmed + self.spot_disagrees > 0 {
             eprintln!(
                 "  Spot: {} witnesses equivalent, {} different or failed",

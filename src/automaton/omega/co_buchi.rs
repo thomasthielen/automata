@@ -22,7 +22,7 @@ mod determinize;
 mod minimize;
 mod normalize;
 
-pub use dbp::{Cell, Criterion, CyclicPruning, HdCharacteristics, Pruning};
+pub use dbp::{Cell, Criterion, CyclicPruning, HdCharacteristics, Pruning, SuccessorPruning};
 use determinize::LanguageClasses;
 
 #[cfg(test)]

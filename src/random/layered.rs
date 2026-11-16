@@ -268,7 +268,7 @@ fn reachable(n: usize, source: usize, successors: impl Fn(usize) -> Vec<usize>) 
 mod tests {
     use super::{LayeredNcw, LayeredParameters};
     use crate::TransitionSystem;
-    use crate::automaton::{Criterion, CyclicPruning, Pruning};
+    use crate::automaton::{Criterion, CyclicPruning, Pruning, SuccessorPruning};
     use rand::{SeedableRng, rngs::StdRng};
 
     /// The completed sketch of the 09-08 meeting: Layer 1 is `p0 -a-> p0, p0 -b-> p1,
@@ -300,7 +300,7 @@ mod tests {
             .unwrap();
         assert_eq!(hd.hd(), 8);
         assert_eq!(hd.classes.len(), 3);
-        assert_eq!(hd.only_sufficient(), Criterion::ALL.to_vec());
+        assert!(!hd.holds(Criterion::Cell) && !hd.holds(Criterion::AlphaTargetCell));
         let Pruning::Found(dcw) = &hd.pruning else {
             panic!("the completed sketch is DBP");
         };
@@ -384,6 +384,25 @@ mod tests {
                 !matches!(
                     hd.cyclic,
                     CyclicPruning::NotSaturated { .. } | CyclicPruning::NotEquivalent(_)
+                ),
+                "seed {seed}"
+            );
+            // the successor criterion is sufficient as well, with the successor pruning, and it
+            // holds whenever every class has at most two states
+            if hd.classes.iter().all(|class| class.len() <= 2) {
+                assert!(hd.holds(Criterion::Successor), "seed {seed}");
+            }
+            if hd.holds(Criterion::Successor) {
+                assert!(
+                    hd.successor.verified().is_some(),
+                    "seed {seed}: {:?}",
+                    hd.successor
+                );
+            }
+            assert!(
+                !matches!(
+                    hd.successor,
+                    SuccessorPruning::NotSaturated { .. } | SuccessorPruning::NotEquivalent(_)
                 ),
                 "seed {seed}"
             );

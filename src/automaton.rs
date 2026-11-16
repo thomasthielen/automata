@@ -24,7 +24,7 @@ pub use omega::{
     IntoDPA, IntoDRA, IntoNCW, MaxEvenParityCondition, MaxOddParityCondition,
     MinEvenParityCondition, MinOddParityCondition, MullerCondition, NCW,
     NondeterministicOmegaAutomaton, OmegaAcceptanceCondition, OmegaAutomaton, Pruning,
-    RabinCondition, RabinPair,
+    RabinCondition, RabinPair, SuccessorPruning,
 };
 
 mod with_initial;

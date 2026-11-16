@@ -22,8 +22,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, warn};
 
 /// A sufficient criterion for d-size = hd-size, checked on the canonical minimal HD-tNCW `C`.
-/// Each criterion implies the next one in [`Criterion::ALL`], so [`Criterion::AlphaTargetCell`]
-/// holds most often.
+/// [`Criterion::Trivial`] implies [`Criterion::Cell`], which implies both
+/// [`Criterion::AlphaTargetCell`] and [`Criterion::Successor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Criterion {
     /// hd equals the number of language classes, so `C` is deterministic already.
@@ -35,11 +35,21 @@ pub enum Criterion {
     /// Like [`Criterion::Cell`], but only for cells whose class is the target of some
     /// `α`-transition, as the cyclic pruning never jumps into any other class. Also sufficient.
     AlphaTargetCell,
+    /// For every class `K`, every letter `σ` on which some state of `K` has no safe transition,
+    /// and every cell `X` of `K`, the safe `σ`-successors of the maximal states of `X` (see
+    /// [`Cell::maxima`]) are pairwise strongly equivalent, i.e. equal, as `C` is safe-minimal.
+    /// Then the successor pruning (see [`SuccessorPruning`]) yields a tDCW with hd states.
+    Successor,
 }
 
 impl Criterion {
-    /// All criteria, from the strongest to the weakest.
-    pub const ALL: [Criterion; 3] = [Self::Trivial, Self::Cell, Self::AlphaTargetCell];
+    /// All criteria.
+    pub const ALL: [Criterion; 4] = [
+        Self::Trivial,
+        Self::Cell,
+        Self::AlphaTargetCell,
+        Self::Successor,
+    ];
 
     /// A short name, e.g. for column headers.
     pub fn name(&self) -> &'static str {
@@ -47,6 +57,7 @@ impl Criterion {
             Self::Trivial => "trivial",
             Self::Cell => "cell",
             Self::AlphaTargetCell => "alpha_target_cell",
+            Self::Successor => "successor",
         }
     }
 }
@@ -151,6 +162,72 @@ impl CyclicPruning {
     }
 }
 
+/// The successor pruning of the canonical minimal HD-tNCW `C` (successor criterion).
+///
+/// The safe components of `C` are ordered cyclically as in [`HdCharacteristics::components`].
+/// The pruning keeps every safe transition and the initial state of `C`. Where a state `q` has no
+/// safe `σ`-transition, it walks through the cells of the class of `q` itself, starting with the
+/// first component after the one of `q` and ending with the one of `q`. In each cell `X`, it
+/// takes the set `T` of safe `σ`-successors of the maximal states of `X`, skips `X` if `T` is
+/// empty, and otherwise keeps only the `α`-transition to the state of `T` (the smallest one, if
+/// there are several strongly equivalent ones). If `T` is empty in every cell, it keeps the
+/// `α`-transition to the smallest target.
+///
+/// If [`Criterion::Successor`] holds, the pruning is equivalent to `C`: on an accepted word, from
+/// some point on a safe component `S*` contains, at every step, a state of the current class that
+/// reads the rest of the word safely, and so does a maximal state of its cell. Hence the walk
+/// never passes `S*`, and once it stops in `S*`, the run reads the rest of the word safely.
+#[derive(Debug, Clone)]
+pub enum SuccessorPruning {
+    /// The successor pruning, checked to be equivalent to `C`. Its states are numbered as in
+    /// [`HdCharacteristics::minimal`].
+    Verified(DCW),
+    /// [`Criterion::Successor`] fails: the maximal states of the cell `cells[cell]` (see
+    /// [`HdCharacteristics::cells`]) have safe `symbol`-successors that are not strongly
+    /// equivalent, although some state of its class has no safe `symbol`-transition. This is
+    /// the first such pair found.
+    Ambiguous {
+        /// The index of the cell in [`HdCharacteristics::cells`].
+        cell: usize,
+        /// The letter.
+        symbol: char,
+    },
+    /// `C` has no `α`-transition from `state` on `symbol` to `target`, the state chosen by the
+    /// walk. This cannot happen if `C` is `α`-saturated, as the canonical form of
+    /// \[AK22, Theorem 4.6\] is.
+    NotSaturated {
+        /// The state without a safe `symbol`-transition.
+        state: u32,
+        /// The letter.
+        symbol: char,
+        /// The missing target.
+        target: u32,
+    },
+    /// The successor pruning could be built, but it is not equivalent to `C`. This would
+    /// contradict the sufficiency of the successor criterion, unless `C` is not normal.
+    NotEquivalent(DCW),
+}
+
+impl SuccessorPruning {
+    /// The tDCW if the successor pruning is verified.
+    pub fn verified(&self) -> Option<&DCW> {
+        match self {
+            Self::Verified(dcw) => Some(dcw),
+            _ => None,
+        }
+    }
+
+    /// A short name, e.g. for CSV columns.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Verified(_) => "verified",
+            Self::Ambiguous { .. } => "ambiguous",
+            Self::NotSaturated { .. } => "not_saturated",
+            Self::NotEquivalent(_) => "NOT_EQUIVALENT",
+        }
+    }
+}
+
 /// Characteristics of the canonical minimal HD-tNCW of a language concerning d-size = hd-size,
 /// as computed by [`NCW::hd_characteristics`].
 #[derive(Debug, Clone)]
@@ -166,9 +243,12 @@ pub struct HdCharacteristics {
     pub cells: Vec<Cell>,
     /// The cyclic pruning of `C`.
     pub cyclic: CyclicPruning,
+    /// The successor pruning of `C`.
+    pub successor: SuccessorPruning,
     /// The number of candidate prunings (initial states times choices), saturating.
     pub prunings: u128,
-    /// The verified cyclic pruning if there is one, otherwise the outcome of the pruning search.
+    /// The verified cyclic pruning if there is one, otherwise the verified successor pruning if
+    /// there is one, otherwise the outcome of the pruning search.
     pub pruning: Pruning,
 }
 
@@ -188,6 +268,7 @@ impl HdCharacteristics {
                 .iter()
                 .filter(|c| c.alpha_target)
                 .all(|c| c.maximum.is_some()),
+            Criterion::Successor => !matches!(self.successor, SuccessorPruning::Ambiguous { .. }),
         }
     }
 
@@ -229,10 +310,11 @@ impl HdCharacteristics {
 impl NCW {
     /// Minimizes a copy of `self` (see [`NCW::minimize`]) and computes the characteristics of
     /// the resulting canonical minimal HD-tNCW `C` that concern d-size = hd-size: its classes,
-    /// safe components and cells, the [`Criterion`]s, the [`CyclicPruning`], and whether `C` is
-    /// DBP.
+    /// safe components and cells, the [`Criterion`]s, the [`CyclicPruning`], the
+    /// [`SuccessorPruning`], and whether `C` is DBP.
     ///
-    /// If the cyclic pruning is verified, it is the result and there is no search. Otherwise the
+    /// If the cyclic or the successor pruning is verified, it is the result and there is no
+    /// search. Otherwise the
     /// DBP search tries every initial state of the class of the initial state together with
     /// every choice of one `α`-successor per state and letter, and checks the language
     /// containment of `C` in the pruned automaton with [`NCW::gfg_containment_relation`], which
@@ -308,6 +390,9 @@ impl NCW {
                 acc.saturating_mul(targets.len() as u128)
             });
         let cyclic = c.cyclic_pruning(&classes, &components, &cells);
+        let strongly_equivalent =
+            |q: u32, t: u32| q == t || (subsafe.contains(&(q, t)) && subsafe.contains(&(t, q)));
+        let successor = c.successor_pruning(&classes, &components, &cells, strongly_equivalent);
         match &cyclic {
             CyclicPruning::NotSaturated {
                 state,
@@ -317,7 +402,12 @@ impl NCW {
             CyclicPruning::NotEquivalent(_) => warn!("the cyclic pruning is not equivalent to C"),
             _ => {}
         }
+        if let SuccessorPruning::NotEquivalent(_) = &successor {
+            warn!("the successor pruning is not equivalent to C");
+        }
         let pruning = if let Some(dcw) = cyclic.verified() {
+            Pruning::Found(dcw.clone())
+        } else if let Some(dcw) = successor.verified() {
             Pruning::Found(dcw.clone())
         } else if prunings > max_prunings {
             debug!("skipping DBP search over {prunings} prunings");
@@ -332,6 +422,7 @@ impl NCW {
             components,
             cells,
             cyclic,
+            successor,
             prunings,
             pruning,
         })
@@ -510,6 +601,98 @@ impl Indexed {
         }
     }
 
+    /// Checks the successor criterion, builds the successor pruning (see [`SuccessorPruning`])
+    /// from the classes, the safe components in their cyclic order, and the cells, and checks it
+    /// for equivalence.
+    fn successor_pruning(
+        &self,
+        classes: &[Vec<u32>],
+        components: &[Vec<u32>],
+        cells: &[Cell],
+        strongly_equivalent: impl Fn(u32, u32) -> bool,
+    ) -> SuccessorPruning {
+        let class_of = block_of(self.n, classes);
+        let component_of = block_of(self.n, components);
+        let cell_of: BTreeMap<(usize, usize), usize> = cells
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| ((cell.class, cell.component), i))
+            .collect();
+        let safe: BTreeMap<(u32, char), u32> = self
+            .edges
+            .iter()
+            .filter(|e| !e.2)
+            .map(|&(q, sym, _, p)| ((q, sym), p))
+            .collect();
+        // the safe `symbol`-successors of the maximal states of a cell, in increasing order
+        let successors = |cell: usize, symbol: char| -> Vec<u32> {
+            let set: BTreeSet<u32> = cells[cell]
+                .maxima
+                .iter()
+                .filter_map(|&m| safe.get(&(m, symbol)).copied())
+                .collect();
+            set.into_iter().collect()
+        };
+        let dead = self.dead_points();
+
+        // the criterion, for every class with a dead pair on `symbol` and every cell of it
+        let dying: BTreeSet<(usize, char)> = dead
+            .iter()
+            .map(|((q, symbol), _)| (class_of[*q as usize], *symbol))
+            .collect();
+        for &(class, symbol) in &dying {
+            for (index, _) in cells.iter().enumerate().filter(|(_, c)| c.class == class) {
+                let t = successors(index, symbol);
+                if t.iter()
+                    .any(|&x| t.iter().any(|&y| !strongly_equivalent(x, y)))
+                {
+                    return SuccessorPruning::Ambiguous {
+                        cell: index,
+                        symbol,
+                    };
+                }
+            }
+        }
+
+        let k = components.len();
+        let mut chosen: BTreeMap<(u32, char), u32> = BTreeMap::new();
+        for ((q, symbol), targets) in dead {
+            let class = class_of[q as usize];
+            let own = component_of[q as usize];
+            // the first cell of the class of `q` after the component of `q` (ending with it)
+            // whose maximal states have a safe `symbol`-successor; otherwise any target
+            let target = (1..=k)
+                .filter_map(|i| cell_of.get(&(class, (own + i) % k)))
+                .find_map(|&cell| successors(cell, symbol).first().copied())
+                .unwrap_or(targets[0]);
+            if !targets.contains(&target) {
+                return SuccessorPruning::NotSaturated {
+                    state: q,
+                    symbol,
+                    target,
+                };
+            }
+            chosen.insert((q, symbol), target);
+        }
+        let pruned = Self {
+            alphabet: self.alphabet.clone(),
+            n: self.n,
+            initial: self.initial,
+            edges: self
+                .edges
+                .iter()
+                .copied()
+                .filter(|&(q, sym, alpha, p)| !alpha || chosen.get(&(q, sym)) == Some(&p))
+                .collect(),
+        };
+        // the pruning is a sub-automaton of `self` with the same initial state
+        if self.contained_in(&pruned) {
+            SuccessorPruning::Verified(pruned.dcw())
+        } else {
+            SuccessorPruning::NotEquivalent(pruned.dcw())
+        }
+    }
+
     /// The deterministic automaton with initial state `initial` that keeps every transition
     /// except at the choice points, where it keeps the transition to `picked[i]`.
     fn pruned(&self, initial: u32, choices: &[((u32, char), Vec<u32>)], picked: &[u32]) -> Self {
@@ -597,7 +780,7 @@ impl Indexed {
 
 #[cfg(test)]
 mod tests {
-    use super::{Criterion, CyclicPruning, Pruning};
+    use super::{Criterion, CyclicPruning, Pruning, SuccessorPruning};
     use crate::automaton::NCW;
     use crate::{Pointed, TransitionSystem};
 
@@ -634,10 +817,23 @@ mod tests {
         assert!(hd.only_sufficient().is_empty() && hd.refuted().is_empty());
     }
 
+    /// The `α`-transitions of a deterministic automaton as `(q, σ, p)`, sorted.
+    fn alpha_transitions(dcw: &super::DCW) -> Vec<(u32, char, u32)> {
+        let mut alpha: Vec<_> = dcw
+            .state_indices()
+            .flat_map(|q| dcw.transitions_from(q).collect::<Vec<_>>())
+            .filter(|t| t.2)
+            .map(|(q, sym, _, p)| (q, sym, p))
+            .collect();
+        alpha.sort();
+        alpha
+    }
+
     #[test]
-    fn smallest_instance_failing_all_criteria_is_dbp() {
+    fn smallest_cell_criterion_failure_is_covered_by_the_successor_criterion() {
         // found by the `hd_criteria` example (seed 1007): one class and one safe component with
-        // the two incomparable maxima 0 and 1, but pruning `1 -a=> 1` leaves an equivalent tDCW
+        // the two incomparable maxima 0 and 1. Only 0 has a safe `a`-transition, to 0, so the
+        // successor pruning keeps `1 -a=> 0`
         let ncw = NCW::builder()
             .with_edges([(0, 'a', false, 0), (0, 'b', false, 1), (1, 'b', false, 0)])
             .with_edges([(1, 'a', true, 0), (1, 'a', true, 1)])
@@ -647,12 +843,114 @@ mod tests {
         assert_eq!(hd.cells.len(), 1);
         assert_eq!(hd.cells[0].maxima, vec![0, 1]);
         assert_eq!(hd.cells[0].maximum, None);
-        assert_eq!(hd.only_sufficient(), Criterion::ALL.to_vec());
+        assert_eq!(
+            hd.only_sufficient(),
+            vec![
+                Criterion::Trivial,
+                Criterion::Cell,
+                Criterion::AlphaTargetCell
+            ]
+        );
         assert!(matches!(hd.cyclic, CyclicPruning::NoMaximum { .. }));
-        let Pruning::Found(dcw) = hd.pruning else {
-            panic!("expected a pruning");
+        let Some(dcw) = hd.successor.verified() else {
+            panic!(
+                "expected a verified successor pruning, got {:?}",
+                hd.successor
+            );
         };
-        assert_eq!(dcw.size(), 2);
+        assert_eq!(alpha_transitions(dcw), vec![(1, 'a', 0)]);
+    }
+
+    #[test]
+    fn successor_pruning_jumps_to_a_successor_not_to_a_maximal_state() {
+        // `Σ*(Σa)^ω`: `0 -a,b-> 1`, `1 -a-> 0`, and `1 -b=> 0, 1`. The states are incomparable,
+        // and the safe `b`-successor of the maximal states is 1, so the pruning keeps `1 -b=> 1`;
+        // `1 -b=> 0` would reject `(ba)^ω`
+        let ncw = NCW::builder()
+            .with_edges([(0, 'a', false, 1), (0, 'b', false, 1), (1, 'a', false, 0)])
+            .with_edges([(1, 'b', true, 0), (1, 'b', true, 1)])
+            .into_ncw(0);
+        let hd = ncw.hd_characteristics(1000).unwrap();
+        assert_eq!(hd.hd(), 2);
+        assert_eq!(hd.cells.len(), 1);
+        assert_eq!(hd.cells[0].maximum, None);
+        assert!(!hd.holds(Criterion::Cell) && hd.holds(Criterion::Successor));
+        let Some(dcw) = hd.successor.verified() else {
+            panic!(
+                "expected a verified successor pruning, got {:?}",
+                hd.successor
+            );
+        };
+        assert_eq!(alpha_transitions(dcw), vec![(1, 'b', 1)]);
+        // the other pruning jumps to the maximal state 0 and rejects `(ab)^ω` from 0
+        let c = super::Indexed::of(&hd.minimal);
+        let to_zero = c.pruned(0, &[((1, 'b'), vec![0, 1])], &[0]);
+        assert!(!c.contained_in(&to_zero));
+    }
+
+    #[test]
+    fn successor_criterion_is_not_necessary() {
+        // `Σ*(ΣΣa)^ω` (seed 247 of `hd_criteria`, letters swapped): `0 -a,b-> 1 -a,b-> 2 -a-> 0`
+        // and `2 -b=> 0, 1, 2`. The three states are pairwise incomparable, and the safe
+        // `b`-successors of the maximal states are 1 and 2, so both criteria fail. Still, `C` is
+        // DBP: jumping to 1 or to 2 works, jumping to 0 does not
+        let ncw = NCW::builder()
+            .with_edges([(0, 'a', false, 1), (0, 'b', false, 1), (1, 'a', false, 2)])
+            .with_edges([(1, 'b', false, 2), (2, 'a', false, 0)])
+            .with_edges([(2, 'b', true, 0), (2, 'b', true, 1), (2, 'b', true, 2)])
+            .into_ncw(0);
+        let hd = ncw.hd_characteristics(1000).unwrap();
+        assert_eq!(hd.hd(), 3);
+        assert_eq!(hd.classes, vec![vec![0, 1, 2]]);
+        assert_eq!(hd.components, vec![vec![0, 1, 2]]);
+        assert_eq!(hd.cells[0].maxima, vec![0, 1, 2]);
+        assert!(matches!(
+            hd.successor,
+            SuccessorPruning::Ambiguous {
+                cell: 0,
+                symbol: 'b'
+            }
+        ));
+        assert_eq!(hd.only_sufficient(), Criterion::ALL.to_vec());
+        let c = super::Indexed::of(&hd.minimal);
+        let works: Vec<bool> = (0..3)
+            .map(|target| {
+                let pruned = c.pruned(0, &[((2, 'b'), vec![0, 1, 2])], &[target]);
+                c.contained_in(&pruned)
+            })
+            .collect();
+        assert_eq!(works, vec![false, true, true]);
+    }
+
+    #[test]
+    fn successor_pruning_of_the_cyclic_example() {
+        let hd = cyclic_example().hd_characteristics(0).unwrap();
+        assert!(hd.holds(Criterion::Successor));
+        let Some(dcw) = hd.successor.verified() else {
+            panic!(
+                "expected a verified successor pruning, got {:?}",
+                hd.successor
+            );
+        };
+        // unlike the cyclic pruning, `q4 -b->` jumps to the safe `b`-successor `q1` of the
+        // maximum `q0`, and `q3 -a->` to `q2`; no state of `{q2, q5}` has a safe `b`-transition,
+        // so `q2 -b->` falls back to the smallest target
+        assert_eq!(
+            alpha_transitions(dcw),
+            vec![
+                (0, 'c', 5),
+                (1, 'b', 3),
+                (1, 'c', 5),
+                (2, 'b', 2),
+                (2, 'c', 2),
+                (3, 'a', 2),
+                (3, 'c', 5),
+                (4, 'a', 2),
+                (4, 'b', 1),
+                (5, 'b', 2),
+                (5, 'c', 2),
+            ]
+        );
     }
 
     /// The example of the cyclic-pruning figure: Layer 1 is `p0 -b-> p0, p0 -a,c-> p1,
