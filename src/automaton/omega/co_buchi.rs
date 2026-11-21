@@ -14,6 +14,14 @@ use std::collections::{BTreeMap, BTreeSet};
 // The steps of the minimization pipeline of [AK22] are implemented as further inherent methods
 // on the co-Büchi automata below, one module per step.
 //
+// Terminology: [AK22] (like [KS15]) speaks of *good-for-games* (GFG) automata. Throughout this
+// crate we say *history-deterministic* (HD) instead, e.g. "HD-tNCW" for AK22's "GFG-tNCW" and
+// `hd_containment_relation`. For Boolean automata such as the tNCWs here, the two notions
+// coincide [BL21], and HD is the term used in more recent literature and in the thesis this
+// code accompanies. Only the paper titles below keep "GFG".
+//
+// [BL21]: Udi Boker, Karoliina Lehtinen: History Determinism vs. Good-for-Gameness in
+//         Quantitative Automata. FSTTCS 2021
 // [AK22]: Bader Abu Radi, Orna Kupferman: Minimization and Canonization of GFG Transition-Based
 //         Automata. Log. Methods Comput. Sci. 18(3) (2022)
 mod centralize;
@@ -59,9 +67,18 @@ impl<T: Deterministic<EdgeColor = bool>> Semantics<T, true> for CoBuchiCondition
 /// are reserved for runs, not transitions: a run is accepting iff it takes
 /// `α`-transitions only finitely often, and it is *safe* iff it takes none at all.
 ///
+/// ### History determinism
+/// \[AK22\] and \[KS15\] call nondeterministic automata that can resolve their nondeterminism
+/// based on the prefix read so far *good-for-games* (GFG). This crate uses the name
+/// *history-deterministic* (HD) instead (e.g. "HD-tNCW" for "GFG-tNCW"): for Boolean automata
+/// like the ones here, the two notions coincide \[BL21\], and HD is the more recent term.
+///
 /// ### References
 /// \[AK22\] Bader Abu Radi, Orna Kupferman: *Minimization and Canonization of GFG
 /// Transition-Based Automata*. Log. Methods Comput. Sci. 18(3) (2022)
+///
+/// \[BL21\] Udi Boker, Karoliina Lehtinen: *History Determinism vs. Good-for-Gameness in
+/// Quantitative Automata*. FSTTCS 2021
 ///
 /// \[KS15\] Denis Kuperberg, Michal Skrzypczak: *On Determinisation of Good-for-Games
 /// Automata*. ICALP (2) 2015: 299-310
@@ -113,7 +130,7 @@ impl<A: Alphabet, Q: Color> DCW<A, Q> {
     }
 
     /// Minimizes `self` as a tNCW, see [`Self::into_ncw`] and [`NCW::minimize`]. The result is a
-    /// minimal GFG-tNCW, which may be nondeterministic, even though `self` is deterministic.
+    /// minimal HD-tNCW, which may be nondeterministic, even though `self` is deterministic.
     pub fn into_minimized(self) -> NCW<A, Q> {
         let mut ncw = self.into_ncw();
         ncw.minimize();
@@ -133,7 +150,7 @@ impl<A: Alphabet, Q: Color> NCW<A, Q> {
         }
     }
 
-    /// Minimizes `self`, which is assumed to be a GFG-tNCW whose states are all GFG, by applying
+    /// Minimizes `self`, which is assumed to be an HD-tNCW whose states are all HD, by applying
     /// the steps of \[AK22\] in order:
     /// 1. [`Self::semantically_determinize`], [`Self::remove_unreachable_states`] and
     ///    [`Self::remove_empty_states`], followed by [`Self::normalize`], which make `self` nice
@@ -142,8 +159,8 @@ impl<A: Alphabet, Q: Color> NCW<A, Q> {
     ///    \[AK22, Theorem 3.15\],
     /// 3. [`Self::safe_minimize`], which makes it safe-minimal \[AK22, Theorem 3.20\].
     ///
-    /// Afterwards, `self` is a nice, safe-centralized and safe-minimal GFG-tNCW equivalent to the
-    /// original one, and hence a minimal GFG-tNCW \[AK22, Theorem 3.6\]. The indices of the
+    /// Afterwards, `self` is a nice, safe-centralized and safe-minimal HD-tNCW equivalent to the
+    /// original one, and hence a minimal HD-tNCW \[AK22, Theorem 3.6\]. The indices of the
     /// remaining states are unchanged.
     ///
     /// Missing transitions are treated as leading to an implicit rejecting sink, which is not
@@ -153,7 +170,7 @@ impl<A: Alphabet, Q: Color> NCW<A, Q> {
     /// result only depends on the language.
     ///
     /// Unlike calling the steps one by one, the containment game (see
-    /// [`Self::gfg_containment_relation`]) is solved only once, before step 1. All later steps
+    /// [`Self::hd_containment_relation`]) is solved only once, before step 1. All later steps
     /// keep the languages of the remaining states, so steps 2 and 3 reuse the resulting partition
     /// into language-equivalent states, and step 3 reuses the subsafe-equivalence relation
     /// computed in step 2 (see [`Self::subsafe_equivalence_relation`]).
@@ -172,7 +189,7 @@ impl<A: Alphabet, Q: Color> NCW<A, Q> {
             self.is_safe_deterministic(),
             "minimization requires a safe deterministic tNCW"
         );
-        let contained = self.gfg_containment_relation();
+        let contained = self.hd_containment_relation();
         self.semantically_determinize_with(&contained);
         self.remove_unreachable_states();
         self.remove_empty_states();
@@ -215,11 +232,11 @@ where
     /// colors. The indices of the remaining states are unchanged.
     ///
     /// Following \[AK22, Theorem 2.2\], this is the step after [`Self::semantically_determinize`]:
-    /// removing unreachable states affects neither the language nor the GFGness of `self`, since
-    /// no run from the initial state ever visits them. It also preserves the other properties
-    /// obtained so far: the languages of the remaining states only depend on states reachable
-    /// from them, which are all kept, so safe determinism, the GFGness of each state and
-    /// semantic determinism all carry over. Doing this after semantic determinization matters,
+    /// removing unreachable states affects neither the language nor the history determinism of
+    /// `self`, since no run from the initial state ever visits them. It also preserves the other
+    /// properties obtained so far: the languages of the remaining states only depend on states
+    /// reachable from them, which are all kept, so safe determinism, the history determinism of
+    /// each state and semantic determinism all carry over. Doing this after semantic determinization matters,
     /// as removing non-covering transitions may make further states unreachable.
     pub fn remove_unreachable_states(&mut self) -> Vec<(D::StateIndex, Q)>
     where
@@ -235,13 +252,13 @@ where
     ///
     /// Missing transitions are treated as leading to an implicit rejecting sink, which is not
     /// counted as a state \[AK22, Remark 3.7\]. Removing the states with an empty language makes
-    /// `self` follow this convention, so that the size of a minimal GFG-tNCW does not depend on
+    /// `self` follow this convention, so that the size of a minimal HD-tNCW does not depend on
     /// whether its input contained an explicit rejecting sink.
     ///
     /// A run is accepting iff it eventually stays on a cycle of safe transitions, so `L(A^q)` is
-    /// nonempty iff `q` can reach such a cycle; this does not require `self` to be GFG. Removing
-    /// the other states affects neither the language nor the GFGness of any remaining state, and
-    /// it preserves the properties obtained by \[AK22, Theorem 2.2\]: only transitions disappear,
+    /// nonempty iff `q` can reach such a cycle; this does not require `self` to be HD. Removing
+    /// the other states affects neither the language nor the history determinism of any
+    /// remaining state, and it preserves the properties obtained by \[AK22, Theorem 2.2\]: only transitions disappear,
     /// which keeps safe determinism and normality, and if some `σ`-successor of a state has an
     /// empty language, then all of them have, so semantic determinism is kept as well. Also, no
     /// state becomes unreachable, since a state that is only reachable via states with an empty
@@ -610,7 +627,7 @@ mod tests {
             stepwise.safe_minimize();
 
             let mut ncw = input.clone();
-            let contained = ncw.gfg_containment_relation();
+            let contained = ncw.hd_containment_relation();
             ncw.semantically_determinize_with(&contained);
             ncw.remove_unreachable_states();
             ncw.remove_empty_states();
@@ -619,7 +636,7 @@ mod tests {
             assert_eq!(
                 classes,
                 LanguageClasses::from_containment(
-                    &ncw.gfg_containment_relation(),
+                    &ncw.hd_containment_relation(),
                     ncw.state_indices()
                 ),
                 "language classes changed during the first step for seed {seed}"
@@ -644,7 +661,7 @@ mod tests {
     #[test]
     #[cfg(feature = "random")]
     fn minimize_preserves_language() {
-        // random GFG-tNCWs and tDCWs, the latter over three letters and with so many
+        // random HD-tNCWs and tDCWs, the latter over three letters and with so many
         // `α`-transitions that 12 of them contain states with an empty language. The result
         // has the language of the input, has the properties of AK22, Theorem 3.20, and cannot
         // be minimized further.

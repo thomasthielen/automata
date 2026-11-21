@@ -211,7 +211,7 @@ pub fn generate_random_ncw(
     let dcw = generate_random_dcw(symbols, size, alpha_probability, rng);
     // exact, as every state of a DCW is HD
     let mut contained_in: BTreeMap<DefaultIdType, Vec<DefaultIdType>> = BTreeMap::new();
-    for (p, s) in dcw.gfg_containment_relation() {
+    for (p, s) in dcw.hd_containment_relation() {
         if p != s {
             contained_in.entry(s).or_default().push(p);
         }
@@ -490,10 +490,7 @@ mod tests {
             assert!(ncw.size() <= 8);
             assert!(ncw.is_safe_deterministic());
             // the added transitions do not change the languages of the states
-            assert_eq!(
-                ncw.gfg_containment_relation(),
-                dcw.gfg_containment_relation()
-            );
+            assert_eq!(ncw.hd_containment_relation(), dcw.hd_containment_relation());
             if ncw.try_into_dcw().is_err() {
                 nondeterministic += 1;
             }

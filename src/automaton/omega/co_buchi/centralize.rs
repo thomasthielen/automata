@@ -127,11 +127,11 @@ where
     }
 
     /// Computes the subsafe-equivalence relation between the states of `self`, which is assumed
-    /// to be a nice GFG-tNCW. Following \[AK22\], `q` is subsafe-equivalent to `s`, denoted
+    /// to be a nice HD-tNCW. Following \[AK22\], `q` is subsafe-equivalent to `s`, denoted
     /// `q ≤ s`, if `L(A^q) = L(A^s)` and `L_safe(A^q) ⊆ L_safe(A^s)`. The result contains the pair
     /// `(q, s)` iff `q ≤ s`.
     pub fn subsafe_equivalence_relation(&self) -> BTreeSet<(D::StateIndex, D::StateIndex)> {
-        let contained = self.gfg_containment_relation();
+        let contained = self.hd_containment_relation();
         let classes = LanguageClasses::from_containment(&contained, self.state_indices());
         self.subsafe_equivalence_relation_with(&classes)
     }
@@ -156,7 +156,7 @@ where
         self.safe_containment_among(candidates)
     }
 
-    /// Returns the states of a frontier of `self`, which is assumed to be a nice GFG-tNCW, given
+    /// Returns the states of a frontier of `self`, which is assumed to be a nice HD-tNCW, given
     /// its subsafe-equivalence relation `subsafe` (see [`Self::subsafe_equivalence_relation`]).
     ///
     /// Following \[AK22, Section 3.2\], the relation `H` on the safe components of `self` contains
@@ -204,7 +204,7 @@ where
             .collect()
     }
 
-    /// Returns `true` iff `self`, which is assumed to be a nice GFG-tNCW, is safe-centralized.
+    /// Returns `true` iff `self`, which is assumed to be a nice HD-tNCW, is safe-centralized.
     /// Following \[AK22\], this is the case if for all states `q` and `s` with `q ≤ s` (see
     /// [`Self::subsafe_equivalence_relation`]), `q` and `s` are in the same safe component.
     /// After [`Self::safe_centralize`], this holds.
@@ -229,10 +229,10 @@ where
 }
 
 impl<A: Alphabet, Q: Color> NCW<A, Q> {
-    /// Safe-centralizes `self`, which is assumed to be a nice GFG-tNCW, by turning it into the
+    /// Safe-centralizes `self`, which is assumed to be a nice HD-tNCW, by turning it into the
     /// tNCW `B_S` of \[AK22, Section 3.2\], where the frontier `S` takes the component of the
     /// smallest state of each ergodic SCC of `H` (see [`Self::subsafe_equivalence_relation`]).
-    /// Afterwards, `self` is a nice, safe-centralized and `α`-homogenous GFG-tNCW equivalent to
+    /// Afterwards, `self` is a nice, safe-centralized and `α`-homogenous HD-tNCW equivalent to
     /// the original one \[AK22, Theorem 3.15\].
     ///
     /// Only the states of `S` are kept, with unchanged indices. For each kept `q` and letter `σ`,
@@ -252,7 +252,7 @@ impl<A: Alphabet, Q: Color> NCW<A, Q> {
             self.is_safe_deterministic(),
             "safe centralization requires a safe deterministic tNCW"
         );
-        let contained = self.gfg_containment_relation();
+        let contained = self.hd_containment_relation();
         let classes = LanguageClasses::from_containment(&contained, self.state_indices());
         self.safe_centralize_with(&classes);
     }

@@ -53,11 +53,11 @@ where
     /// For every word, the accepting runs of `self` are the same before and after: a run that
     /// takes a recolored transition infinitely often leaves a safe component infinitely often,
     /// and since the safe components form a DAG, it must then also take infinitely many
-    /// `α`-transitions that were already there. Hence, the language and the GFGness of every
-    /// state are unchanged \[AK22, Theorem 2.2\]. As no transition or state is removed, and
-    /// transitions only ever change from safe to `α`, reachability, safe determinism and
+    /// `α`-transitions that were already there. Hence, the language and the history determinism
+    /// of every state are unchanged \[AK22, Theorem 2.2\]. As no transition or state is removed,
+    /// and transitions only ever change from safe to `α`, reachability, safe determinism and
     /// semantic determinism are preserved as well. This is the last step towards a *nice*
-    /// GFG-tNCW, after [`Self::remove_empty_states`].
+    /// HD-tNCW, after [`Self::remove_empty_states`].
     ///
     /// If a recolored transition coincides with an `α`-transition that is already present, only
     /// one copy of it is kept.

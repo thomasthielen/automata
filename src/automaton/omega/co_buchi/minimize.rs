@@ -25,7 +25,7 @@ where
     D: TransitionSystem<Alphabet = A, StateColor = Q, EdgeColor = bool>,
 {
     /// Computes the strong-equivalence relation between the states of `self`, which is assumed
-    /// to be a nice GFG-tNCW. Following \[AK22\], `q` and `s` are strongly-equivalent, denoted
+    /// to be a nice HD-tNCW. Following \[AK22\], `q` and `s` are strongly-equivalent, denoted
     /// `q ≈ s`, if `L(A^q) = L(A^s)` and `L_safe(A^q) = L_safe(A^s)`. The result contains the pair
     /// `(q, s)` iff `q ≈ s`.
     ///
@@ -35,7 +35,7 @@ where
         strong_equivalence(&self.subsafe_equivalence_relation())
     }
 
-    /// Returns `true` iff `self`, which is assumed to be a nice GFG-tNCW, is safe-minimal.
+    /// Returns `true` iff `self`, which is assumed to be a nice HD-tNCW, is safe-minimal.
     /// Following \[AK22\], this is the case if no two different states are strongly-equivalent
     /// (see [`Self::strong_equivalence_relation`]). After [`Self::safe_minimize`], this holds.
     pub fn is_safe_minimal(&self) -> bool {
@@ -47,11 +47,11 @@ where
 
 impl<A: Alphabet, Q: Color> NCW<A, Q> {
     /// Safe-minimizes `self`, which is assumed to be a nice, safe-centralized and `α`-homogenous
-    /// GFG-tNCW (as obtained by [`Self::safe_centralize`]), by turning it into the quotient tNCW
+    /// HD-tNCW (as obtained by [`Self::safe_centralize`]), by turning it into the quotient tNCW
     /// `C` of \[AK22, Section 3.3\], in which strongly-equivalent states are merged (see
     /// [`Self::strong_equivalence_relation`]). Afterwards, `self` is a nice, safe-centralized,
-    /// safe-minimal and `α`-homogenous GFG-tNCW equivalent to the original one \[AK22, Theorem
-    /// 3.20\], and hence a minimal GFG-tNCW \[AK22, Theorem 3.6\].
+    /// safe-minimal and `α`-homogenous HD-tNCW equivalent to the original one \[AK22, Theorem
+    /// 3.20\], and hence a minimal HD-tNCW \[AK22, Theorem 3.6\].
     ///
     /// Each equivalence class `[q]` of `≈` is represented by its smallest state, which is kept,
     /// while all other states are removed. The indices of the kept states are unchanged. There

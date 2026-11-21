@@ -24,7 +24,7 @@ where
     D: TransitionSystem<Alphabet = A, StateColor = Q, EdgeColor = bool>,
 {
     /// Computes the language containment relation between the states of `self`, which is
-    /// assumed to be a GFG-tNCW.
+    /// assumed to be an HD-tNCW.
     /// The result contains the pair `(q, s)` iff `L(A^q) ⊆ L(A^s)`,
     /// where `A^q` is `self` with initial state `q`.
     ///
@@ -41,13 +41,16 @@ where
     /// solving a single [`ParityGame`]. To keep the arena total, missing transitions are
     /// treated as `α`-transitions into an implicit rejecting sink.
     ///
-    /// If Duplicator wins, then `L(A^q) ⊆ L(A^s)` holds regardless of GFGness. The converse
-    /// (and hence exactness of the relation) requires that `A^s` is GFG: Duplicator then wins
-    /// by following the strategy that witnesses `A^s`'s GFGness. Note that a GFG-tNCW may
-    /// contain states that are not GFG (e.g. states that are never used by the witnessing
+    /// If Duplicator wins, then `L(A^q) ⊆ L(A^s)` holds regardless of history determinism. The
+    /// converse (and hence exactness of the relation) requires that `A^s` is HD: Duplicator then
+    /// wins by following the strategy that witnesses that `A^s` is HD. Note that an HD-tNCW may
+    /// contain states that are not HD (e.g. states that are never used by the witnessing
     /// strategy); for pairs `(q, s)` with such an `s`, the returned relation may miss
     /// containments, but never contains a wrong one.
-    pub fn gfg_containment_relation(&self) -> BTreeSet<(D::StateIndex, D::StateIndex)> {
+    ///
+    /// \[KS15\] and \[AK22\] call HD automata *good-for-games* (GFG); the two notions coincide
+    /// for the automata considered here, see [`crate::automaton::DCW`].
+    pub fn hd_containment_relation(&self) -> BTreeSet<(D::StateIndex, D::StateIndex)> {
         let states: Vec<D::StateIndex> = self.state_indices().collect();
         let letters: Vec<_> = self.alphabet().universe().collect();
         if letters.is_empty() {
@@ -136,17 +139,17 @@ where
         relation
     }
 
-    /// Returns `true` iff `self`, which is assumed to be a GFG-tNCW, is semantically
+    /// Returns `true` iff `self`, which is assumed to be an HD-tNCW, is semantically
     /// deterministic. Following \[AK22\], this is the case if different nondeterministic
     /// choices lead to equivalent states: for every state `q` and letter `σ`, and all
     /// transitions `⟨q, σ, s⟩` and `⟨q, σ, s'⟩` (of any color), we have `L(A^s) = L(A^s')`.
     ///
-    /// Language equivalence is decided with [`Self::gfg_containment_relation`], so the result
-    /// is exact if all `σ`-successors of all states are GFG. Otherwise, some equivalences might
+    /// Language equivalence is decided with [`Self::hd_containment_relation`], so the result
+    /// is exact if all `σ`-successors of all states are HD. Otherwise, some equivalences might
     /// be missed, in which case `false` may be returned for a semantically deterministic
     /// automaton; a returned `true` is always correct.
     pub fn is_semantically_deterministic(&self) -> bool {
-        let contained = self.gfg_containment_relation();
+        let contained = self.hd_containment_relation();
         let equivalent = |s, t| contained.contains(&(s, t)) && contained.contains(&(t, s));
         self.state_indices().all(|q| {
             let mut successors: BTreeMap<_, Vec<D::StateIndex>> = BTreeMap::new();
@@ -159,17 +162,17 @@ where
         })
     }
 
-    /// Semantically determinizes `self`, which is assumed to be a GFG-tNCW, by removing all
+    /// Semantically determinizes `self`, which is assumed to be an HD-tNCW, by removing all
     /// transitions that are not covering. Following \[AK22\], a transition `⟨q, σ, s⟩` is
     /// *covering* if for every transition `⟨q, σ, s'⟩`, it holds that `L(A^s') ⊆ L(A^s)`.
     ///
-    /// Since the transitions used by a strategy witnessing GFGness are covering \[KS15\], this
-    /// neither changes the language nor the GFGness of `self`, and afterwards all remaining
-    /// `σ`-successors of a state are equivalent, i.e. [`Self::is_semantically_deterministic`]
-    /// holds. Removing transitions also preserves safe determinism.
+    /// Since the transitions used by a strategy witnessing history determinism are covering
+    /// \[KS15\], this neither changes the language nor the history determinism of `self`, and
+    /// afterwards all remaining `σ`-successors of a state are equivalent, i.e.
+    /// [`Self::is_semantically_deterministic`] holds. Removing transitions also preserves safe determinism.
     ///
-    /// Covering is decided with [`Self::gfg_containment_relation`], so this requires that all
-    /// states of `self` are GFG (which is why \[AK22, Theorem 2.2\] removes non-GFG states
+    /// Covering is decided with [`Self::hd_containment_relation`], so this requires that all
+    /// states of `self` are HD (which is why \[AK22, Theorem 2.2\] removes non-HD states
     /// first). Otherwise, containments might be missed and covering transitions removed.
     ///
     /// Edges whose expression matches several symbols are kept as they are if they are
@@ -179,12 +182,12 @@ where
     where
         D: Shrinkable + Sproutable,
     {
-        let contained = self.gfg_containment_relation();
+        let contained = self.hd_containment_relation();
         self.semantically_determinize_with(&contained);
     }
 
     /// Does the same as [`Self::semantically_determinize`], but decides covering with the given
-    /// containment relation `contained` (as computed by [`Self::gfg_containment_relation`])
+    /// containment relation `contained` (as computed by [`Self::hd_containment_relation`])
     /// instead of computing it, so that [`NCW::minimize`](super::NCW::minimize) can reuse it
     /// for the later steps.
     pub(super) fn semantically_determinize_with(
@@ -221,7 +224,7 @@ where
     }
 }
 
-/// The partition of the states of a GFG-tNCW into classes of language-equivalent states, i.e.
+/// The partition of the states of an HD-tNCW into classes of language-equivalent states, i.e.
 /// `q` and `s` are in the same class iff `L(A^q) = L(A^s)`. Each state is mapped to the smallest
 /// state of its class, which identifies the class.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,7 +232,7 @@ pub(super) struct LanguageClasses<S>(BTreeMap<S, S>);
 
 impl<S: Ord + Copy> LanguageClasses<S> {
     /// Builds the partition of `states` from the containment relation `contained` (see
-    /// [`Automaton::gfg_containment_relation`]), where `q` and `s` are equivalent if they are
+    /// [`Automaton::hd_containment_relation`]), where `q` and `s` are equivalent if they are
     /// connected by a chain of mutually contained states. As the containment relation never
     /// contains a wrong pair, every such chain witnesses a real equivalence, so this is exact
     /// whenever `contained` is, and may only find more equivalences otherwise.
@@ -383,7 +386,7 @@ mod tests {
     use crate::TransitionSystem;
 
     #[test]
-    fn gfg_containment_relation_of_simple_languages() {
+    fn hd_containment_relation_of_simple_languages() {
         // 0 is universal, 1 is empty, 2 accepts "finitely many `a`s", and 3 is empty via the
         // implicit rejecting sink on `b`
         let ncw = NCW::builder()
@@ -397,7 +400,7 @@ mod tests {
                 (3, 'a', true, 3),
             ])
             .into_ncw(0);
-        let contained = ncw.gfg_containment_relation();
+        let contained = ncw.hd_containment_relation();
         for q in 0..4 {
             assert!(contained.contains(&(q, q)));
             assert!(contained.contains(&(1, q)));
@@ -414,7 +417,7 @@ mod tests {
     fn ak22_figure_2_states_are_equivalent() {
         // AK22, Example 3.1
         let dcw = ak22_figure_2();
-        assert_eq!(dcw.gfg_containment_relation().len(), 9);
+        assert_eq!(dcw.hd_containment_relation().len(), 9);
         assert!(dcw.is_semantically_deterministic());
     }
 
@@ -433,7 +436,7 @@ mod tests {
         // covering: in AK22, Figure 4 all states are equivalent, and in the second automaton,
         // 1 and 2 both accept "finitely many `a`s", but in structurally different ways
         let figure_4 = NCW::builder().with_edges(AK22_FIGURE_4).into_ncw(0);
-        assert_eq!(figure_4.gfg_containment_relation().len(), 4);
+        assert_eq!(figure_4.hd_containment_relation().len(), 4);
         let structurally_different = NCW::builder()
             .with_edges([
                 (0, 'a', true, 1),

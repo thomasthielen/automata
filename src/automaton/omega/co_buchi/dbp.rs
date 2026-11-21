@@ -295,7 +295,7 @@ impl NCW {
     /// search. Otherwise the
     /// DBP search tries every initial state of the class of the initial state together with
     /// every choice of one `α`-successor per state and letter, and checks the language
-    /// containment of `C` in the pruned automaton with [`NCW::gfg_containment_relation`], which
+    /// containment of `C` in the pruned automaton with [`NCW::hd_containment_relation`], which
     /// is exact here as the pruned automaton is deterministic. It is skipped if there are more
     /// than `max_prunings` candidates.
     ///
@@ -314,7 +314,7 @@ impl NCW {
         let c = Indexed::of(&minimal);
         let n = c.n;
 
-        let contained = minimal.gfg_containment_relation();
+        let contained = minimal.hd_containment_relation();
         let equivalent =
             |q: u32, s: u32| contained.contains(&(q, s)) && contained.contains(&(s, q));
         let classes = partition(n, equivalent);
@@ -708,7 +708,7 @@ impl Indexed {
         );
         union
             .ncw()
-            .gfg_containment_relation()
+            .hd_containment_relation()
             .contains(&(self.initial, other.initial + offset))
     }
 

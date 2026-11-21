@@ -1,7 +1,7 @@
 //! Two-player games on finite graphs.
 //!
 //! Currently, this only contains a solver for (max-)parity games, which is used to decide
-//! language containment between states of a GFG-tNCW, see `gfg_containment_relation` on
+//! language containment between states of an HD-tNCW, see `hd_containment_relation` on
 //! [`crate::automaton::NCW`].
 
 /// One of the two players of a [`ParityGame`]. [`Player::Even`] wins a play iff the greatest

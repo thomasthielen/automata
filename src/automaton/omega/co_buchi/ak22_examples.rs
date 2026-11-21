@@ -76,7 +76,7 @@ pub(super) const AK22_FIGURE_4: [(u32, char, bool, u32); 9] = [
 ];
 
 /// State 0 reads `a` safely into the universal state 1, and via the `α`-transition `⟨0, a, 2⟩`
-/// into the empty state 2. The latter is not covering, so this is safe deterministic and GFG,
+/// into the empty state 2. The latter is not covering, so this is safe deterministic and HD,
 /// but not semantically deterministic.
 pub(super) fn non_covering_ncw() -> NCW {
     NCW::builder()
@@ -129,11 +129,11 @@ pub(super) fn prop_ncw(
     NCW::from_parts(ts, 0)
 }
 
-/// Returns `true` iff `L(a) = L(b)`, where all states of `a` and `b` are assumed to be GFG.
+/// Returns `true` iff `L(a) = L(b)`, where all states of `a` and `b` are assumed to be HD.
 ///
 /// Both are copied into a single tNCW, in which the states of `a` come first and those of `b`
 /// follow, and the containment between the two initial states is decided in both directions with
-/// [`NCW::gfg_containment_relation`], which is exact as all states are GFG.
+/// [`NCW::hd_containment_relation`], which is exact as all states are HD.
 pub(super) fn language_equivalent(a: &NCW, b: &NCW) -> bool {
     let mut union = NTS::for_alphabet(a.alphabet().clone());
     let mut index = BTreeMap::new();
@@ -148,7 +148,7 @@ pub(super) fn language_equivalent(a: &NCW, b: &NCW) -> bool {
         }
     }
     let (q, s) = (index[&(0, a.initial())], index[&(1, b.initial())]);
-    let contained = NCW::from_parts(union, q).gfg_containment_relation();
+    let contained = NCW::from_parts(union, q).hd_containment_relation();
     contained.contains(&(q, s)) && contained.contains(&(s, q))
 }
 
