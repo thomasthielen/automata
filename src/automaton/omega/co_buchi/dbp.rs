@@ -779,6 +779,45 @@ mod tests {
         assert!(hd.only_sufficient().is_empty() && hd.refuted().is_empty());
     }
 
+    /// The canonical minimal HD-tNCW of `L₂ = Σ*(Σab*a)^ω`, built like [`l1`].
+    #[cfg(feature = "spot")]
+    fn l2() -> NCW {
+        let alpha = |q, sym| [0, 1, 2].map(|p| (q, sym, true, p));
+        NCW::builder()
+            .with_edges([(0, 'a', false, 2), (0, 'b', false, 2), (1, 'a', false, 0)])
+            .with_edges([(1, 'b', false, 1), (2, 'a', false, 1)])
+            .with_edges(alpha(2, 'b'))
+            .into_ncw(0)
+    }
+
+    /// Cross-checks with Spot; run them with `cargo test --features spot spot:: -- --ignored`.
+    #[cfg(feature = "spot")]
+    mod spot {
+        use super::{Pruning, l1, l2};
+        use crate::TransitionSystem;
+        use crate::spot::Spot;
+
+        /// `L₁` and `L₂` are HD-helpful: hd = 3, but a minimal tDCW, computed with Spot's
+        /// SAT-based minimization, has six states. Neither language has an empty residual, and
+        /// Spot's tDCWs are complete, so this does not depend on whether a rejecting sink is
+        /// counted.
+        #[test]
+        #[ignore = "requires Spot"]
+        fn l1_and_l2_need_six_states_deterministically() {
+            let spot = Spot::default();
+            for ncw in [l1(), l2()] {
+                let hd = ncw.hd_characteristics(1000).unwrap();
+                assert_eq!(hd.hd(), 3);
+                assert!(matches!(hd.pruning, Pruning::NotDbp));
+                assert!(spot.equivalent(&ncw, &hd.minimal).unwrap());
+                let dcw = spot.min_dcw(&ncw).unwrap().expect("a tDCW recognizes it");
+                assert_eq!(dcw.size(), 6);
+                assert!(dcw.is_complete());
+                assert!(spot.equivalent(&ncw, &dcw).unwrap());
+            }
+        }
+    }
+
     /// The `α`-transitions of a deterministic automaton as `(q, σ, p)`, sorted.
     fn alpha_transitions(dcw: &super::DCW) -> Vec<(u32, char, u32)> {
         let mut alpha: Vec<_> = dcw

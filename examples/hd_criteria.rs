@@ -13,10 +13,12 @@
 //! `seed` (0; sample `i` uses seed `seed + i`), `symbols` (2), `max_prunings` (3000), `out`
 //! (stdout). For `layered`: `layer1` (4; the Layer-1 size of each sample is drawn from
 //! `1..=layer1`), `children` (3), `safe` (0.75). For `uniform`: `size` (5; states before
-//! removing unreachable ones), `alpha` (0.3; probability of an `α`-transition). Flags:
-//! `spot` checks every witness for d = hd with Spot's `autfilt` whenever some criterion fails
-//! although d = hd (adds the column `spot`); `automata` adds the columns `minimal_hd_tncw` and
-//! `minimal_tdcw`.
+//! removing unreachable ones), `alpha` (0.3; probability of an `α`-transition),
+//! `spot_timeout` (600; seconds per SAT minimization, see below; `0` skips it, so that `spot`
+//! only checks equivalence). Flags: `spot` cross-checks
+//! every sample with Spot's `autfilt` (needs the feature `spot`, see [`automata::spot`]) and adds
+//! the columns `spot_minimal`, `spot_prunings` and `spot_d`; `automata` adds the columns
+//! `minimal_hd_tncw` and `minimal_tdcw`.
 //!
 //! Columns:
 //! - `seed`: the seed of the sample; `layer1_size`, `ncw_size`: Layer-1 size (empty for
@@ -30,11 +32,24 @@
 //!   as there are more than `max_prunings` candidate prunings (`candidate_prunings`).
 //! - `witness`: what certifies d = hd: the cyclic pruning (`cell`), the successor pruning
 //!   (`successor`) or the search (`search`); empty if d > hd or undecided.
+//! - `spot_minimal`: whether Spot finds `C` equivalent to the generated tNCW (`equivalent`,
+//!   `DIFFERENT` or `error`). This checks [`NCW::minimize`] independently of the containment
+//!   game that it and all checks of this crate use.
+//! - `spot_prunings`: the same for every pruning that was constructed and verified (cyclic,
+//!   successor, search); `equivalent` only if Spot confirms all of them, empty if there is none.
+//! - `spot_d`: unless a pruning certifies d = hd, the size of a minimal tDCW computed by Spot
+//!   ([`Spot::min_dcw`](automata::spot::Spot::min_dcw), SAT-based), without a rejecting sink as
+//!   for `hd`; empty if `spot_timeout=0`; `timeout` if it took longer than `spot_timeout` seconds (via coreutils `timeout`
+//!   appended to the launcher), `error` if Spot failed. Spot's tDCW is checked to be
+//!   equivalent to the generated tNCW.
 //! - `minimal_hd_tncw` is `C`, and `minimal_tdcw` the witness (same state numbering), written as
 //!   `init q` followed by the transitions `q-σ->p` (safe) and `q-σ=>p` (`α`).
 //!
 //! Anomalies, i.e. a pruning that is not equivalent or not `α`-saturated, or a criterion that
-//! holds although d > hd, would contradict the thesis; they are reported on stderr.
+//! holds although d > hd, would contradict the thesis; they are reported on stderr. With
+//! `spot`, so are disagreements with Spot: `C` or a pruning that Spot finds not equivalent, a
+//! tDCW from Spot that is not equivalent, or `spot_d` < hd, or `spot_d` = hd for a `C` that the
+//! search found not DBP.
 
 use automata::alphabet::CharAlphabet;
 use automata::automaton::NCW;
@@ -93,6 +108,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     if spot && !cfg!(feature = "spot") {
         return Err("the flag `spot` needs the feature `spot`".into());
     }
+    let spot_timeout = number("spot_timeout", 600.0) as u64;
     let automata = args.contains_key("automata");
     let mut out: Box<dyn Write> = match args.get("out") {
         Some(path) if !path.is_empty() => Box::new(BufWriter::new(File::create(path)?)),
@@ -112,7 +128,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     header.extend(Criterion::ALL.map(|c| c.name()));
     header.extend(["d_eq_hd", "witness", "candidate_prunings"]);
     if spot {
-        header.push("spot");
+        header.extend(["spot_minimal", "spot_prunings", "spot_d"]);
     }
     if automata {
         header.extend(["minimal_hd_tncw", "minimal_tdcw"]);
@@ -142,12 +158,17 @@ fn run() -> Result<(), Box<dyn Error>> {
             eprintln!("seed {seed}: {anomaly}");
             summary.anomalies += 1;
         }
-        let spot_check = if spot && !hd.only_sufficient().is_empty() {
-            spot_equivalent(&ncw, &hd.pruning)
+        let spot_checks = if spot {
+            let checks = spot_checks(&ncw, &hd, spot_timeout);
+            for anomaly in checks.anomalies(&hd) {
+                eprintln!("seed {seed}: {anomaly}");
+                summary.anomalies += 1;
+            }
+            checks
         } else {
-            ""
+            SpotChecks::default()
         };
-        summary.add(&hd, spot_check);
+        summary.add(&hd, &spot_checks);
 
         let mut row = vec![
             seed.to_string(),
@@ -172,7 +193,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         row.push(witness(&hd).to_string());
         row.push(hd.prunings.to_string());
         if spot {
-            row.push(spot_check.to_string());
+            row.push(spot_checks.minimal.to_string());
+            row.push(spot_checks.prunings.to_string());
+            row.push(spot_checks.d.clone());
         }
         if automata {
             row.push(transitions(&hd.minimal));
@@ -252,24 +275,122 @@ where
     edges.join(" ")
 }
 
+/// The results of the Spot cross-checks of one sample, see the columns `spot_*`.
+#[derive(Default)]
+struct SpotChecks {
+    minimal: &'static str,
+    prunings: &'static str,
+    /// the number of prunings that Spot found equivalent and the number of the others
+    pruning_counts: (usize, usize),
+    d: String,
+    /// whether Spot's minimal tDCW is equivalent to the input, if it computed one
+    d_equivalent: Option<&'static str>,
+}
+
+impl SpotChecks {
+    fn anomalies(&self, hd: &HdCharacteristics) -> Vec<String> {
+        let mut anomalies = vec![];
+        if self.minimal == "DIFFERENT" {
+            anomalies.push("Spot: C is not equivalent to the generated tNCW".to_string());
+        }
+        if self.prunings == "DIFFERENT" {
+            anomalies.push("Spot: a verified pruning is not equivalent".to_string());
+        }
+        if self.d_equivalent == Some("DIFFERENT") {
+            anomalies.push("Spot: its minimal tDCW is not equivalent".to_string());
+        }
+        if let Ok(d) = self.d.parse::<usize>() {
+            if d < hd.hd() {
+                anomalies.push(format!("Spot: d = {d} < hd = {}", hd.hd()));
+            }
+            if d == hd.hd() && hd.d_equals_hd() == Some(false) {
+                anomalies.push(format!("Spot: d = hd = {d}, but C is not DBP"));
+            }
+        }
+        anomalies
+    }
+}
+
 #[cfg(feature = "spot")]
-fn spot_equivalent(ncw: &automata::automaton::NCW, pruning: &Pruning) -> &'static str {
-    let Pruning::Found(dcw) = pruning else {
-        return "";
-    };
-    match automata::spot::Spot::from_env().equivalent(ncw, dcw) {
+fn spot_checks(ncw: &NCW, hd: &HdCharacteristics, timeout: u64) -> SpotChecks {
+    use automata::spot::{Spot, SpotError};
+
+    let spot = Spot::from_env();
+    let verdict = |result: Result<bool, SpotError>| match result {
         Ok(true) => "equivalent",
         Ok(false) => "DIFFERENT",
         Err(e) => {
             eprintln!("Spot failed: {e}");
             "error"
         }
+    };
+    let mut checks = SpotChecks {
+        minimal: verdict(spot.equivalent(ncw, &hd.minimal)),
+        ..SpotChecks::default()
+    };
+
+    // every verified pruning, each distinct one only once
+    let mut prunings: Vec<&automata::automaton::DCW> = vec![];
+    let found = match &hd.pruning {
+        Pruning::Found(dcw) => Some(dcw),
+        _ => None,
+    };
+    for dcw in [hd.cyclic.verified(), hd.successor.verified(), found]
+        .into_iter()
+        .flatten()
+    {
+        if !prunings.iter().any(|p| transitions(*p) == transitions(dcw)) {
+            prunings.push(dcw);
+        }
     }
+    for dcw in &prunings {
+        match verdict(spot.equivalent(ncw, *dcw)) {
+            "equivalent" => checks.pruning_counts.0 += 1,
+            other => {
+                checks.pruning_counts.1 += 1;
+                if checks.prunings != "DIFFERENT" {
+                    checks.prunings = other;
+                }
+            }
+        }
+    }
+    if checks.prunings.is_empty() && !prunings.is_empty() {
+        checks.prunings = "equivalent";
+    }
+
+    // `spot_timeout=0` skips the SAT minimization (coreutils `timeout 0` would mean no limit)
+    if hd.d_equals_hd() != Some(true) && timeout > 0 {
+        // the launcher of `Spot::from_env`, followed by coreutils `timeout`
+        let mut launcher: Vec<String> = match std::env::var(Spot::ENV) {
+            Ok(launcher) => launcher.split_whitespace().map(String::from).collect(),
+            Err(_) if cfg!(windows) => vec!["wsl".into(), "-e".into()],
+            Err(_) => vec![],
+        };
+        launcher.extend(["timeout".to_string(), timeout.to_string()]);
+        checks.d = match Spot::with_launcher(launcher).min_dcw(ncw) {
+            Ok(Some(dcw)) => {
+                checks.d_equivalent = Some(verdict(spot.equivalent(ncw, &dcw)));
+                // without states of empty language, i.e. without a rejecting sink, as for `hd`
+                let mut without_sink = dcw.into_ncw();
+                without_sink.remove_empty_states();
+                without_sink.size().to_string()
+            }
+            Ok(None) => "none".to_string(),
+            Err(SpotError::Failed {
+                status: Some(124), ..
+            }) => "timeout".to_string(),
+            Err(e) => {
+                eprintln!("Spot failed: {e}");
+                "error".to_string()
+            }
+        };
+    }
+    checks
 }
 
 #[cfg(not(feature = "spot"))]
-fn spot_equivalent(_: &automata::automaton::NCW, _: &Pruning) -> &'static str {
-    ""
+fn spot_checks(_: &NCW, _: &HdCharacteristics, _: u64) -> SpotChecks {
+    SpotChecks::default()
 }
 
 #[derive(Default)]
@@ -282,12 +403,16 @@ struct Summary {
     /// samples with d = hd per witness
     witnesses: BTreeMap<&'static str, usize>,
     anomalies: usize,
-    spot_confirmed: usize,
-    spot_disagrees: usize,
+    /// samples whose `C` Spot found equivalent, and the others
+    spot_minimal: (usize, usize),
+    /// prunings that Spot found equivalent, and the others
+    spot_prunings: (usize, usize),
+    /// `(hd, d_eq_hd, spot_d)` of the samples for which Spot computed d
+    spot_d: Vec<(usize, Option<bool>, String)>,
 }
 
 impl Summary {
-    fn add(&mut self, hd: &HdCharacteristics, spot: &str) {
+    fn add(&mut self, hd: &HdCharacteristics, spot: &SpotChecks) {
         match hd.d_equals_hd() {
             Some(true) => self.dbp += 1,
             Some(false) => self.not_dbp += 1,
@@ -303,8 +428,17 @@ impl Summary {
         if !witness.is_empty() {
             *self.witnesses.entry(witness).or_default() += 1;
         }
-        self.spot_confirmed += (spot == "equivalent") as usize;
-        self.spot_disagrees += (spot == "DIFFERENT" || spot == "error") as usize;
+        match spot.minimal {
+            "" => {}
+            "equivalent" => self.spot_minimal.0 += 1,
+            _ => self.spot_minimal.1 += 1,
+        }
+        self.spot_prunings.0 += spot.pruning_counts.0;
+        self.spot_prunings.1 += spot.pruning_counts.1;
+        if !spot.d.is_empty() {
+            self.spot_d
+                .push((hd.hd(), hd.d_equals_hd(), spot.d.clone()));
+        }
     }
 
     fn print(&self, samples: u64) {
@@ -327,11 +461,22 @@ impl Summary {
         if self.anomalies > 0 {
             eprintln!("  ANOMALIES: {}", self.anomalies);
         }
-        if self.spot_confirmed + self.spot_disagrees > 0 {
+        if self.spot_minimal.0 + self.spot_minimal.1 > 0 {
             eprintln!(
-                "  Spot: {} witnesses equivalent, {} different or failed",
-                self.spot_confirmed, self.spot_disagrees
+                "  Spot: C equivalent for {} samples, different or failed for {}",
+                self.spot_minimal.0, self.spot_minimal.1
             );
+            eprintln!(
+                "  Spot: {} prunings equivalent, {} different or failed",
+                self.spot_prunings.0, self.spot_prunings.1
+            );
+            for (hd, d_eq_hd, d) in &self.spot_d {
+                let search = match d_eq_hd {
+                    Some(false) => "not DBP",
+                    _ => "undecided",
+                };
+                eprintln!("  Spot: hd = {hd} ({search}), d = {d}");
+            }
         }
     }
 }

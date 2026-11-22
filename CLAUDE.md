@@ -12,12 +12,12 @@ Related crates that stay elsewhere: `hoars` (HOA parser, `leonbohn/hoars`, depen
 
 ```shell
 cargo build --all-targets
-cargo test                         # 68 unit tests, 45 doctests (some ignored)
+cargo test                         # 144 unit tests, 52 doctests (some ignored); `--features random` adds 16 unit tests
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-cargo test --features spot spot:: -- --ignored   # Spot tests, need autfilt (via WSL on Windows)
-cargo run --release --features random --example hd_criteria -- samples=1500 out=hd.csv   # CSV sweep: criteria vs. DBP; flags `spot` (feature spot, confirms witnesses), `automata` (adds C and the witness)
+cargo test --features spot spot:: -- --ignored   # Spot tests (incl. d = 6 for L₁/L₂ in dbp.rs), need autfilt (via WSL on Windows)
+cargo run --release --features random --example hd_criteria -- samples=1500 out=hd.csv   # CSV sweep: criteria vs. DBP; flags `spot` (feature spot: checks C and every pruning for equivalence, computes d via SAT unless a pruning certifies d = hd; option `spot_timeout`, default 600 s per SAT run, `0` skips SAT), `automata` (adds C and the witness); `generator=uniform` for the uniform-tDCW baseline
 ./scripts/check                    # same as CI: fmt, clippy, doc, per-feature check (needs cargo-hack), tests in three feature configurations
 ```
 
