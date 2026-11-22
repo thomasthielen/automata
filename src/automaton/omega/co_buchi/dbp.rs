@@ -2,8 +2,9 @@
 //! d-size = hd-size that are checked on the canonical minimal HD-tNCW `C` of a language.
 //!
 //! A tDCW with `|C|` states exists iff `C` is DBP, i.e. iff removing `α`-transitions turns `C`
-//! into an equivalent deterministic automaton (the initial state may be moved to any state of
-//! its class). A pruning found by [`NCW::hd_characteristics`] is a certificate for d = hd by
+//! into an equivalent deterministic automaton. Whether a pruning is equivalent does not depend on
+//! which state of the class of the initial state is initial (this is shown in the thesis), so the
+//! search keeps the initial state of `C`. A pruning found by [`NCW::hd_characteristics`] is a certificate for d = hd by
 //! itself: it is a tDCW with hd states whose equivalence is checked by the search. The converse,
 //! "not DBP ⇒ d > hd", relies on the thesis result that every minimal tDCW, once normalized,
 //! embeds into `C` via the safe isomorphism of \[AK22, Theorem 4.2\].
@@ -74,8 +75,8 @@ pub struct Cell {
 /// Outcome of the search for a deterministic pruning, see [`NCW::hd_characteristics`].
 #[derive(Debug, Clone)]
 pub enum Pruning {
-    /// An equivalent tDCW obtained by removing `α`-transitions (and possibly moving the initial
-    /// state within its class). Its states are numbered as in [`HdCharacteristics::minimal`].
+    /// An equivalent tDCW obtained by removing `α`-transitions, with the initial state of `C`.
+    /// Its states are numbered as in [`HdCharacteristics::minimal`].
     Found(DCW),
     /// No pruning is equivalent, so the automaton is not DBP.
     NotDbp,
@@ -228,7 +229,8 @@ pub struct HdCharacteristics {
     pub cyclic: CyclicPruning,
     /// The successor pruning of `C`.
     pub successor: SuccessorPruning,
-    /// The number of candidate prunings (initial states times choices), saturating.
+    /// The number of candidate prunings (the product of the numbers of choices at the
+    /// choice points), saturating.
     pub prunings: u128,
     /// The verified cyclic pruning if there is one, otherwise the verified successor pruning if
     /// there is one, otherwise the outcome of the pruning search.
@@ -293,8 +295,8 @@ impl NCW {
     ///
     /// If the cyclic or the successor pruning is verified, it is the result and there is no
     /// search. Otherwise the
-    /// DBP search tries every initial state of the class of the initial state together with
-    /// every choice of one `α`-successor per state and letter, and checks the language
+    /// DBP search tries every choice of one `α`-successor per state and letter, keeping the
+    /// initial state of `C` (moving it within its class would not help), and checks the language
     /// containment of `C` in the pruned automaton with [`NCW::hd_containment_relation`], which
     /// is exact here as the pruned automaton is deterministic. It is skipped if there are more
     /// than `max_prunings` candidates.
@@ -355,15 +357,10 @@ impl NCW {
             }
         }
 
-        let initials: Vec<u32> = (0..n as u32)
-            .filter(|&q| equivalent(c.initial, q))
-            .collect();
         let choices = c.choice_points();
-        let prunings = choices
-            .iter()
-            .fold(initials.len() as u128, |acc, (_, targets)| {
-                acc.saturating_mul(targets.len() as u128)
-            });
+        let prunings = choices.iter().fold(1u128, |acc, (_, targets)| {
+            acc.saturating_mul(targets.len() as u128)
+        });
         let cyclic = c.cyclic_pruning(&classes, &components, &cells);
         let strongly_equivalent =
             |q: u32, t: u32| q == t || (subsafe.contains(&(q, t)) && subsafe.contains(&(t, q)));
@@ -388,7 +385,7 @@ impl NCW {
             debug!("skipping DBP search over {prunings} prunings");
             Pruning::TooLarge
         } else {
-            c.search_pruning(&initials, &choices)
+            c.search_pruning(&choices)
         };
 
         Ok(HdCharacteristics {
@@ -668,9 +665,9 @@ impl Indexed {
         }
     }
 
-    /// The deterministic automaton with initial state `initial` that keeps every transition
+    /// The deterministic automaton with the initial state of `self` that keeps every transition
     /// except at the choice points, where it keeps the transition to `picked[i]`.
-    fn pruned(&self, initial: u32, choices: &[((u32, char), Vec<u32>)], picked: &[u32]) -> Self {
+    fn pruned(&self, choices: &[((u32, char), Vec<u32>)], picked: &[u32]) -> Self {
         let chosen: BTreeMap<(u32, char), u32> = choices
             .iter()
             .zip(picked)
@@ -685,7 +682,7 @@ impl Indexed {
         Self {
             alphabet: self.alphabet.clone(),
             n: self.n,
-            initial,
+            initial: self.initial,
             edges,
         }
     }
@@ -713,31 +710,28 @@ impl Indexed {
     }
 
     /// Searches all prunings and returns the first one that is equivalent to `self`.
-    fn search_pruning(&self, initials: &[u32], choices: &[((u32, char), Vec<u32>)]) -> Pruning {
-        for &initial in initials {
-            // a mixed-radix counter over the choices
-            let mut counter = vec![0usize; choices.len()];
-            loop {
-                let picked: Vec<u32> = choices
-                    .iter()
-                    .zip(&counter)
-                    .map(|((_, targets), &i)| targets[i])
-                    .collect();
-                let pruned = self.pruned(initial, choices, &picked);
-                // the pruning is a sub-automaton of `self` started in an equivalent state, so
-                // its language is contained in that of `self`
-                if self.contained_in(&pruned) {
-                    return Pruning::Found(pruned.dcw());
-                }
-                let Some(digit) = (0..counter.len()).find(|&i| counter[i] + 1 < choices[i].1.len())
-                else {
-                    break;
-                };
-                counter[digit] += 1;
-                counter[..digit].fill(0);
+    fn search_pruning(&self, choices: &[((u32, char), Vec<u32>)]) -> Pruning {
+        // a mixed-radix counter over the choices
+        let mut counter = vec![0usize; choices.len()];
+        loop {
+            let picked: Vec<u32> = choices
+                .iter()
+                .zip(&counter)
+                .map(|((_, targets), &i)| targets[i])
+                .collect();
+            let pruned = self.pruned(choices, &picked);
+            // the pruning is a sub-automaton of `self` with the same initial state, so its
+            // language is contained in that of `self`
+            if self.contained_in(&pruned) {
+                return Pruning::Found(pruned.dcw());
             }
+            let Some(digit) = (0..counter.len()).find(|&i| counter[i] + 1 < choices[i].1.len())
+            else {
+                return Pruning::NotDbp;
+            };
+            counter[digit] += 1;
+            counter[..digit].fill(0);
         }
-        Pruning::NotDbp
     }
 
     /// Turns a deterministic `self` into a [`DCW`].
@@ -778,7 +772,7 @@ mod tests {
         assert_eq!(hd.components, vec![vec![0, 1, 2]]);
         assert_eq!(hd.cells[0].maxima, vec![0, 1, 2]);
         assert_eq!(hd.cells[0].maximum, None);
-        assert_eq!(hd.prunings, 9);
+        assert_eq!(hd.prunings, 3);
         assert!(matches!(hd.pruning, Pruning::NotDbp));
         assert!(matches!(hd.cyclic, CyclicPruning::NoMaximum { cell: 0 }));
         assert!(Criterion::ALL.iter().all(|&c| !hd.holds(c)));
@@ -848,7 +842,7 @@ mod tests {
         assert_eq!(alpha_transitions(dcw), vec![(1, 'b', 1)]);
         // the other pruning jumps to the maximal state 0 and rejects `(ab)^ω` from 0
         let c = super::Indexed::of(&hd.minimal);
-        let to_zero = c.pruned(0, &[((1, 'b'), vec![0, 1])], &[0]);
+        let to_zero = c.pruned(&[((1, 'b'), vec![0, 1])], &[0]);
         assert!(!c.contained_in(&to_zero));
     }
 
@@ -879,7 +873,7 @@ mod tests {
         let c = super::Indexed::of(&hd.minimal);
         let works: Vec<bool> = (0..3)
             .map(|target| {
-                let pruned = c.pruned(0, &[((2, 'b'), vec![0, 1, 2])], &[target]);
+                let pruned = c.pruned(&[((2, 'b'), vec![0, 1, 2])], &[target]);
                 c.contained_in(&pruned)
             })
             .collect();
@@ -951,12 +945,12 @@ mod tests {
 
     #[test]
     fn cyclic_pruning_certifies_d_equals_hd_without_search() {
-        // 4 initial states times 2^9 * 4^2 choices; the search is disabled
+        // 2^9 * 4^2 choices; the search is disabled
         let hd = cyclic_example().hd_characteristics(0).unwrap();
         assert_eq!(hd.hd(), 6);
         assert_eq!(hd.classes, vec![vec![0, 1, 3, 4], vec![2, 5]]);
         assert_eq!(hd.components, vec![vec![0, 1, 2], vec![3], vec![4, 5]]);
-        assert_eq!(hd.prunings, 32768);
+        assert_eq!(hd.prunings, 8192);
         assert!(hd.holds(Criterion::Cell));
         // the only cell with several states is `{q0, q1}`, with maximum `q0`
         let cell = hd.cells.iter().find(|c| c.states == [0, 1]).unwrap();
@@ -1012,7 +1006,7 @@ mod tests {
 
     #[test]
     fn search_is_skipped_above_the_limit() {
-        let hd = l1().hd_characteristics(8).unwrap();
+        let hd = l1().hd_characteristics(2).unwrap();
         assert!(matches!(hd.pruning, Pruning::TooLarge));
         assert_eq!(hd.d_equals_hd(), None);
     }

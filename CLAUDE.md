@@ -4,9 +4,9 @@ Guidance for working in this repository. See `PLAN.md` for the roadmap and known
 
 ## What this is
 
-`automata` is a single Rust crate for working with transition systems and automata over finite and infinite (omega) words. It was extracted, with history, from `leonbohn/frieda` (where it lived as `crates/automata` plus `crates/automata-core`). The former `automata-core` crate was merged in as top-level modules (`alphabet`, `word`, `math`, `dag`, plus `Color`/`Lattice`/`Void`/`Int`/`Show` at the crate root). Edition 2024, version 0.1.0, MSRV 1.88 (`rust-version`; checked by the `msrv` CI job).
+`automata` is a single Rust crate for working with transition systems and automata over finite and infinite (omega) words. Upstream is León Bohn's `leonbohn/automata` (formerly named `frieda`, where the code lived as `crates/automata` plus `crates/automata-core`; published on crates.io as `automata`). This repository is the fork `thomasthielen/automata` (remote `upstream` = Bohn's), branched at `303cfe4` (2026-10-25, 18 commits before upstream's `v0.1.0` tag). The former `automata-core` crate was merged in as top-level modules (`alphabet`, `word`, `math`, `dag`, plus `Color`/`Lattice`/`Void`/`Int`/`Show` at the crate root). Edition 2024, version 0.1.0, MSRV 1.88 (`rust-version`; checked by the `msrv` CI job).
 
-Related crates that stay elsewhere: `hoars` (HOA parser, `leonbohn/hoars`, depended on from crates.io, currently 0.3) and `automata-learning` (learning algorithms, in `leonbohn/frieda`).
+Related crates that stay elsewhere: `hoars` (HOA parser, `leonbohn/hoars`, depended on from crates.io, currently 0.3) and `automata-learning` (learning algorithms; lived alongside this code when the upstream repository was still named `frieda`, not part of this crate). The local `frieda*` folders next to this repository are clones of upstream under its old name.
 
 ## Commands
 

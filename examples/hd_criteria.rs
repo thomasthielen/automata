@@ -1,23 +1,28 @@
-//! Draws random two-layer HD-tNCWs, minimizes them and checks the sufficient criteria for
-//! d-size = hd-size against an exact DBP search. Writes one CSV row per sample (UTF-8) to stdout
+//! Draws random two-layer HD-tNCWs (or, as a baseline, uniformly random tDCWs), minimizes them
+//! and checks the sufficient criteria for d-size = hd-size against an exact DBP search. Writes one CSV row per sample (UTF-8) to stdout
 //! or to the file given by `out`, and a summary to stderr.
 //!
 //! ```shell
 //! cargo run --release --features random --example hd_criteria -- samples=1500 out=hd.csv
 //! cargo run --release --features spot,random --example hd_criteria -- spot   # also asks Spot
+//! cargo run --release --features random --example hd_criteria -- generator=uniform size=8 alpha=0.4
 //! ```
 //!
-//! Arguments (all optional, as `key=value`): `samples` (default 1000), `seed` (0; sample `i` uses
-//! seed `seed + i`), `symbols` (2), `layer1` (4; the Layer-1 size of each sample is drawn from
-//! `1..=layer1`), `children` (3), `safe` (0.75), `max_prunings` (3000), `out` (stdout). Flags:
+//! Arguments (all optional, as `key=value`): `generator` (`layered` (default) for
+//! [`LayeredNcw::random`], `uniform` for [`generate_random_dcw`]), `samples` (default 1000),
+//! `seed` (0; sample `i` uses seed `seed + i`), `symbols` (2), `max_prunings` (3000), `out`
+//! (stdout). For `layered`: `layer1` (4; the Layer-1 size of each sample is drawn from
+//! `1..=layer1`), `children` (3), `safe` (0.75). For `uniform`: `size` (5; states before
+//! removing unreachable ones), `alpha` (0.3; probability of an `α`-transition). Flags:
 //! `spot` checks every witness for d = hd with Spot's `autfilt` whenever some criterion fails
 //! although d = hd (adds the column `spot`); `automata` adds the columns `minimal_hd_tncw` and
 //! `minimal_tdcw`.
 //!
 //! Columns:
-//! - `seed`: the seed of the sample; `layer1_size`, `ncw_size`: Layer-1 size and number of states
-//!   of the generated tNCW.
-//! - `hd`: number of states of the canonical minimal HD-tNCW `C`; `classes`, `safe_components`,
+//! - `seed`: the seed of the sample; `layer1_size`, `ncw_size`: Layer-1 size (empty for
+//!   `uniform`) and number of states of the generated tNCW.
+//! - `hd`: number of states of the canonical minimal HD-tNCW `C`, without the implicit rejecting
+//!   sink (see [`NCW::minimize`]); `classes`, `safe_components`,
 //!   `cells`: its language classes, safe components and nonempty cells; `max_maximal_states`:
 //!   the largest number of maximal states of a cell (a cell has a maximum iff this is 1).
 //! - `residual`, `cell`, `successor`: whether the criterion holds (`1`/`0`).
@@ -32,8 +37,9 @@
 //! holds although d > hd, would contradict the thesis; they are reported on stderr.
 
 use automata::alphabet::CharAlphabet;
+use automata::automaton::NCW;
 use automata::automaton::{Criterion, CyclicPruning, HdCharacteristics, Pruning, SuccessorPruning};
-use automata::random::{LayeredNcw, LayeredParameters};
+use automata::random::{LayeredNcw, LayeredParameters, generate_random_dcw};
 use automata::{Pointed, TransitionSystem};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::collections::BTreeMap;
@@ -73,6 +79,16 @@ fn run() -> Result<(), Box<dyn Error>> {
         max_children: number("children", 3.0) as usize,
         safe_probability: number("safe", 0.75),
     };
+    let uniform = match args.get("generator").map(String::as_str) {
+        None | Some("layered") => false,
+        Some("uniform") => true,
+        Some(other) => return Err(format!("unknown generator `{other}`").into()),
+    };
+    let size = number("size", 5.0) as usize;
+    let alpha = number("alpha", 0.3);
+    if uniform && (size == 0 || !(0.0..=1.0).contains(&alpha)) {
+        return Err("`uniform` needs size >= 1 and alpha in [0, 1]".into());
+    }
     let spot = args.contains_key("spot");
     if spot && !cfg!(feature = "spot") {
         return Err("the flag `spot` needs the feature `spot`".into());
@@ -107,13 +123,18 @@ fn run() -> Result<(), Box<dyn Error>> {
     for sample in 0..samples {
         let seed = seed + sample;
         let rng = &mut StdRng::seed_from_u64(seed);
-        let parameters = LayeredParameters {
-            layer1_size: rng.gen_range(1..=layer1.max(1)),
-            ..parameters
+        let (layer1_size, ncw): (String, NCW) = if uniform {
+            let dcw = generate_random_dcw(parameters.symbols, size, alpha, rng);
+            (String::new(), dcw.into_ncw())
+        } else {
+            let parameters = LayeredParameters {
+                layer1_size: rng.gen_range(1..=layer1.max(1)),
+                ..parameters
+            };
+            let layered = LayeredNcw::random(parameters, rng)
+                .map_err(|e| format!("invalid parameters: {e}"))?;
+            (layered.layer1_size().to_string(), layered.to_ncw())
         };
-        let layered =
-            LayeredNcw::random(parameters, rng).map_err(|e| format!("invalid parameters: {e}"))?;
-        let ncw = layered.to_ncw();
         let hd = ncw
             .hd_characteristics(max_prunings)
             .map_err(|e| format!("seed {seed}: {e}"))?;
@@ -130,8 +151,8 @@ fn run() -> Result<(), Box<dyn Error>> {
 
         let mut row = vec![
             seed.to_string(),
-            layered.layer1_size().to_string(),
-            layered.size().to_string(),
+            layer1_size,
+            ncw.size().to_string(),
             hd.hd().to_string(),
             hd.classes.len().to_string(),
             hd.components.len().to_string(),
